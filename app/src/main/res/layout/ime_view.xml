@@ -1,0 +1,178 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/imeRootContainer"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:paddingLeft="12dp"
+    android:paddingTop="12dp"
+    android:paddingRight="12dp"
+    android:paddingBottom="12dp">
+
+    <FrameLayout
+        android:id="@+id/imePanel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:background="@drawable/ime_panel_bg">
+
+        <LinearLayout
+            android:id="@+id/imeContent"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:padding="12dp">
+
+            <!-- ここを「候補 or topRow」の固定高さホストにする（ズレ防止） -->
+            <FrameLayout
+                android:id="@+id/candidateHost"
+                android:layout_width="match_parent"
+                android:layout_height="52dp">
+
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/candidateRecycler"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:overScrollMode="never"
+                    android:visibility="gone" />
+
+                <!-- 上段：ステータス + モード切替 + リサイズ（候補が無い時はここを表示） -->
+                <LinearLayout
+                    android:id="@+id/topRow"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:visibility="visible">
+
+                    <TextView
+                        android:id="@+id/imeStatusText"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:paddingBottom="0dp"
+                        android:text="status"
+                        android:textSize="14sp"
+                        android:visibility="gone" />
+
+                    <Button
+                        android:id="@+id/btnInputMode"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minHeight="36dp"
+                        android:text="Direct" />
+
+                    <Button
+                        android:id="@+id/btnResizeMode"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minHeight="36dp"
+                        android:text="Resize" />
+                </LinearLayout>
+
+            </FrameLayout>
+
+            <!-- キーボードタイプ切替（ここに動的にボタンを生成する） -->
+            <LinearLayout
+                android:id="@+id/keyboardTypeRow"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:paddingTop="6dp"
+                android:paddingBottom="6dp" />
+
+            <!-- Preedit時のみ：左右カーソル -->
+            <LinearLayout
+                android:id="@+id/navRow"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/btnLeft"
+                    android:layout_width="0dp"
+                    android:layout_height="44dp"
+                    android:layout_weight="1"
+                    android:text="◀" />
+
+                <Button
+                    android:id="@+id/btnRight"
+                    android:layout_width="0dp"
+                    android:layout_height="44dp"
+                    android:layout_weight="1"
+                    android:text="▶" />
+            </LinearLayout>
+
+            <!-- ここにキーボードViewを差し替えて入れる -->
+            <FrameLayout
+                android:id="@+id/keyboardContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content" />
+        </LinearLayout>
+
+        <!-- リサイズ用ハンドル（8点） -->
+        <View
+            android:id="@+id/handleLeft"
+            android:layout_width="32dp"
+            android:layout_height="140dp"
+            android:layout_gravity="center_vertical|start"
+            android:background="#33000000"
+            android:visibility="gone" />
+
+        <View
+            android:id="@+id/handleRight"
+            android:layout_width="32dp"
+            android:layout_height="140dp"
+            android:layout_gravity="center_vertical|end"
+            android:background="#33000000"
+            android:visibility="gone" />
+
+        <View
+            android:id="@+id/handleTop"
+            android:layout_width="140dp"
+            android:layout_height="32dp"
+            android:layout_gravity="top|center_horizontal"
+            android:background="#33000000"
+            android:visibility="gone" />
+
+        <View
+            android:id="@+id/handleBottom"
+            android:layout_width="140dp"
+            android:layout_height="32dp"
+            android:layout_gravity="bottom|center_horizontal"
+            android:background="#33000000"
+            android:visibility="gone" />
+
+        <View
+            android:id="@+id/handleTopLeft"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_gravity="top|start"
+            android:background="#66000000"
+            android:visibility="gone" />
+
+        <View
+            android:id="@+id/handleTopRight"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_gravity="top|end"
+            android:background="#66000000"
+            android:visibility="gone" />
+
+        <View
+            android:id="@+id/handleBottomLeft"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_gravity="bottom|start"
+            android:background="#66000000"
+            android:visibility="gone" />
+
+        <View
+            android:id="@+id/handleBottomRight"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_gravity="bottom|end"
+            android:background="#66000000"
+            android:visibility="gone" />
+
+    </FrameLayout>
+</FrameLayout>
