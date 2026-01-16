@@ -1,4 +1,4 @@
-package com.kazumaproject.hiraganahandwritekeyboard
+package com.kazumaproject.hiraganahandwritekeyboard.input_method.ui
 
 import android.view.View
 import android.view.ViewGroup

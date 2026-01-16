@@ -1,4 +1,4 @@
-package com.kazumaproject.hiraganahandwritekeyboard
+package com.kazumaproject.hiraganahandwritekeyboard.input_method
 
 import android.content.SharedPreferences
 import android.graphics.Color
@@ -22,6 +22,14 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.kazumaproject.hiraganahandwritekeyboard.R
+import com.kazumaproject.hiraganahandwritekeyboard.input_method.domain.KeyboardAction
+import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.ImeController
+import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.KeyboardPlugin
+import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.KeyboardRegistry
+import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.adapters.CandidateAdapter
+import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.keyboard_plugins.HandwriteKeyboardPlugin
+import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.keyboard_plugins.NumberKeyboardPlugin
 import kotlin.math.max
 import kotlin.math.min
 
@@ -589,106 +597,6 @@ class HiraganaImeService : InputMethodService() {
             }
         }
         return sb.toString()
-    }
-
-    private class CandidateAdapter(
-        private val onClick: (String) -> Unit
-    ) : RecyclerView.Adapter<CandidateAdapter.VH>() {
-
-        private val items = mutableListOf<String>()
-        private var selectedIndex: Int = -1
-
-        /**
-         * 重要：
-         * - 「候補表示＝自動選択」はしない（selectedIndex は基本 -1 のまま）
-         * - CandidateMode に入った瞬間にだけ setSelectedIndex(0) する
-         */
-        fun submit(newItems: List<String>) {
-            items.clear()
-            items.addAll(newItems)
-
-            selectedIndex = when {
-                items.isEmpty() -> -1
-                selectedIndex in items.indices -> selectedIndex
-                else -> -1 // 自動で 0 にはしない
-            }
-
-            notifyDataSetChanged()
-        }
-
-        fun indexOf(value: String): Int = items.indexOf(value)
-
-        fun getSelectedIndex(): Int = selectedIndex
-
-        fun setSelectedIndex(index: Int) {
-            val newIdx = if (index in items.indices) index else -1
-            if (newIdx == selectedIndex) return
-            selectedIndex = newIdx
-            notifyDataSetChanged()
-        }
-
-        fun getSelected(): String? {
-            return if (selectedIndex in items.indices) items[selectedIndex] else null
-        }
-
-        fun moveNextWrap(): Int {
-            if (items.isEmpty()) {
-                selectedIndex = -1
-                notifyDataSetChanged()
-                return -1
-            }
-            val next = if (selectedIndex !in items.indices) 0 else (selectedIndex + 1) % items.size
-            selectedIndex = next
-            notifyDataSetChanged()
-            return next
-        }
-
-        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
-            val tv = TextView(parent.context).apply {
-                setPadding(dp(parent, 10), dp(parent, 8), dp(parent, 10), dp(parent, 8))
-                setTextColor(Color.BLACK)
-                textSize = 16f
-            }
-            val lp = RecyclerView.LayoutParams(
-                RecyclerView.LayoutParams.WRAP_CONTENT,
-                RecyclerView.LayoutParams.WRAP_CONTENT
-            )
-            lp.setMargins(dp(parent, 6), dp(parent, 6), dp(parent, 6), dp(parent, 6))
-            tv.layoutParams = lp
-            return VH(tv, onClick)
-        }
-
-        override fun onBindViewHolder(holder: VH, position: Int) {
-            holder.bind(items[position], isSelected = (position == selectedIndex))
-        }
-
-        override fun getItemCount(): Int = items.size
-
-        class VH(
-            private val tv: TextView,
-            private val onClick: (String) -> Unit
-        ) : RecyclerView.ViewHolder(tv) {
-            fun bind(text: String, isSelected: Boolean) {
-                tv.text = text
-                if (isSelected) {
-                    tv.setBackgroundColor(Color.argb(80, 59, 130, 246))
-                } else {
-                    tv.setBackgroundColor(Color.argb(35, 0, 0, 0))
-                }
-                tv.setOnClickListener { onClick(text) }
-            }
-        }
-
-        private companion object {
-            fun dp(parent: ViewGroup, dp: Int): Int {
-                val dm = parent.resources.displayMetrics
-                return TypedValue.applyDimension(
-                    TypedValue.COMPLEX_UNIT_DIP,
-                    dp.toFloat(),
-                    dm
-                ).toInt()
-            }
-        }
     }
 
     // ---------------- Keyboard plugin host ----------------

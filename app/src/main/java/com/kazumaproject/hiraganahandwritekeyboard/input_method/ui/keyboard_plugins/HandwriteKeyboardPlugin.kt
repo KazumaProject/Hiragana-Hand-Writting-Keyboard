@@ -1,9 +1,13 @@
-package com.kazumaproject.hiraganahandwritekeyboard
+package com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.keyboard_plugins
 
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import com.kazumaproject.hiraganahandwritekeyboard.R
+import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.ImeController
+import com.kazumaproject.hiraganahandwritekeyboard.input_method.domain.KeyboardAction
+import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.KeyboardPlugin
 
 class HandwriteKeyboardPlugin : KeyboardPlugin {
     override val id: String = "handwrite"

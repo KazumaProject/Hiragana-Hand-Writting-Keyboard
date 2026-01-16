@@ -1,10 +1,11 @@
-package com.kazumaproject.hiraganahandwritekeyboard
+package com.kazumaproject.hiraganahandwritekeyboard.container_app
 
 import android.os.Bundle
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import com.kazumaproject.hiraganahandwritekeyboard.R
 
 class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {

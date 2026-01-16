@@ -1,4 +1,4 @@
-package com.kazumaproject.hiraganahandwritekeyboard
+package com.kazumaproject.hiraganahandwritekeyboard.input_method.ui
 
 class KeyboardRegistry(private val plugins: List<KeyboardPlugin>) {
     private val map = plugins.associateBy { it.id }
