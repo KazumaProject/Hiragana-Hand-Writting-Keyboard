@@ -298,11 +298,16 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
     ) {
         fun clearKey() = KeyboardKeySpec.ButtonKey(
             keyId = "clear",
-            text = "⟲",
+            text = "\uD83E\uDDF9",
             minHeightDp = keyMinHeightDp,
             onClick = {
                 dual.clearBoth()
                 cancelInferJobs()
+
+                it.dispatch(KeyboardAction.Backspace)
+                if (controller.isPreedit && activePreviewLen > 0) {
+                    activePreviewLen = (activePreviewLen - 1).coerceAtLeast(0)
+                }
 
                 submitCandidates(dual, DualDrawingComposerView.Side.A, emptyList())
                 submitCandidates(dual, DualDrawingComposerView.Side.B, emptyList())
@@ -325,7 +330,7 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
                     )
                     // ★キー高さに合わせる
                     setButtonHeightDp(keyMinHeightDp.toFloat())
-                    setIconTextSizeSp(18f)
+                    setIconTextSizeSp(8f)
 
                     setListener(object : CursorNavView.Listener {
                         override fun onAction(
@@ -337,19 +342,51 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
                                 CursorNavView.Action.LONG_TAP -> {
                                     if (side == CursorNavView.Side.LEFT) {
                                         c.dispatch(KeyboardAction.MoveCursor(-1))
+                                        dual.clearBoth()
+                                        cancelInferJobs()
+                                        submitCandidates(dual, DualDrawingComposerView.Side.A, emptyList())
+                                        submitCandidates(dual, DualDrawingComposerView.Side.B, emptyList())
+
+                                        activePreviewLen = 0
+                                        genA++
+                                        genB++
                                     } else {
                                         c.dispatch(KeyboardAction.MoveCursor(+1))
+                                        dual.clearBoth()
+                                        cancelInferJobs()
+                                        submitCandidates(dual, DualDrawingComposerView.Side.A, emptyList())
+                                        submitCandidates(dual, DualDrawingComposerView.Side.B, emptyList())
+
+                                        activePreviewLen = 0
+                                        genA++
+                                        genB++
                                     }
                                 }
 
                                 CursorNavView.Action.FLICK_UP,
                                 CursorNavView.Action.LONG_FLICK_UP -> {
                                     c.dispatch(KeyboardAction.MoveCursorVertical(-1))
+                                    dual.clearBoth()
+                                    cancelInferJobs()
+                                    submitCandidates(dual, DualDrawingComposerView.Side.A, emptyList())
+                                    submitCandidates(dual, DualDrawingComposerView.Side.B, emptyList())
+
+                                    activePreviewLen = 0
+                                    genA++
+                                    genB++
                                 }
 
                                 CursorNavView.Action.FLICK_DOWN,
                                 CursorNavView.Action.LONG_FLICK_DOWN -> {
                                     c.dispatch(KeyboardAction.MoveCursorVertical(+1))
+                                    dual.clearBoth()
+                                    cancelInferJobs()
+                                    submitCandidates(dual, DualDrawingComposerView.Side.A, emptyList())
+                                    submitCandidates(dual, DualDrawingComposerView.Side.B, emptyList())
+
+                                    activePreviewLen = 0
+                                    genA++
+                                    genB++
                                 }
                             }
                         }
@@ -417,18 +454,18 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         )
 
         val allKeysVertical = listOf(
-            listOf(clearKey()),
-            listOf(cursorNavKey()),
+            //listOf(clearKey()),
             listOf(backspaceKey()),
+            listOf(cursorNavKey()),
             listOf(spaceKey()),
             listOf(enterKey())
         )
 
         val allKeysHorizontal = listOf(
             listOf(
-                clearKey(),
-                cursorNavKey(),
+                //clearKey(),
                 backspaceKey(),
+                cursorNavKey(),
                 spaceKey(),
                 enterKey()
             )

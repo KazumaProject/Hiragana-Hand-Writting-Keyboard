@@ -59,14 +59,21 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:minHeight="36dp"
-                        android:text="Direct" />
+                        android:text="Direct"
+                        android:visibility="gone" />
 
                     <Button
                         android:id="@+id/btnResizeMode"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
+                        android:contentDescription="Resize"
+                        android:drawableStart="@drawable/ic_resize_24"
+                        android:drawablePadding="0dp"
+                        android:minWidth="36dp"
                         android:minHeight="36dp"
-                        android:text="Resize" />
+                        android:paddingLeft="10dp"
+                        android:paddingRight="10dp"
+                        android:text="" />
 
                     <!-- ★追加：TOPROWモードでのみ表示される「プラグイン切替トグル」 -->
                     <Button
@@ -74,7 +81,8 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:minHeight="36dp"
-                        android:text="Keyboard" />
+                        android:text="Keyboard"
+                        android:visibility="gone" />
 
                 </LinearLayout>
 

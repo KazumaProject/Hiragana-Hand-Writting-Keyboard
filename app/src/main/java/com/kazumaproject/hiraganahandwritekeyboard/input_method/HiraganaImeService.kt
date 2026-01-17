@@ -500,7 +500,7 @@ class HiraganaImeService : InputMethodService() {
             toggle?.visibility = View.GONE
         } else {
             tabs?.visibility = View.GONE
-            toggle?.visibility = View.VISIBLE
+            //toggle?.visibility = View.VISIBLE
         }
 
         updateKeyboardUiState()
@@ -1188,7 +1188,7 @@ class HiraganaImeService : InputMethodService() {
         candidateRecycler?.isEnabled = !enabled
         inputModeBtn?.isEnabled = !enabled
         toggleKeyboardTopRowBtn?.isEnabled = !enabled
-        resizeModeBtn?.text = if (enabled) "Done" else "Resize"
+        resizeModeBtn?.text = if (enabled) "終了" else ""
 
         updateKeyboardUiState()
     }
