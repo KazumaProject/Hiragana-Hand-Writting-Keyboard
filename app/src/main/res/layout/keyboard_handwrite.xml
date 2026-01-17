@@ -12,7 +12,7 @@
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:minHeight="220dp"
-        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintBottom_toTopOf="@id/keyRowsBottom"
         app:layout_constraintEnd_toStartOf="@id/keyRowsRight"
         app:layout_constraintStart_toEndOf="@id/keyRowsLeft"
         app:layout_constraintTop_toTopOf="parent" />
@@ -20,7 +20,7 @@
     <!-- 左側キー：高さを dualDrawing と同一にする -->
     <com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.widgets.KeyboardKeyRowsView
         android:id="@+id/keyRowsLeft"
-        android:layout_width="56dp"
+        android:layout_width="64dp"
         android:layout_height="0dp"
         android:gravity="top"
         android:paddingTop="0dp"
@@ -32,7 +32,7 @@
     <!-- 右側キー：高さを dualDrawing と同一にする -->
     <com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.widgets.KeyboardKeyRowsView
         android:id="@+id/keyRowsRight"
-        android:layout_width="56dp"
+        android:layout_width="64dp"
         android:layout_height="0dp"
         android:gravity="top"
         android:paddingTop="0dp"
@@ -40,5 +40,17 @@
         app:layout_constraintBottom_toBottomOf="@id/dualDrawing"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintTop_toTopOf="@id/dualDrawing" />
+
+    <!-- 下側キー：dualDrawing の下に出す -->
+    <com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.widgets.KeyboardKeyRowsView
+        android:id="@+id/keyRowsBottom"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:paddingTop="0dp"
+        android:paddingBottom="0dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="@id/dualDrawing"
+        app:layout_constraintStart_toStartOf="@id/dualDrawing"
+        app:layout_constraintTop_toBottomOf="@id/dualDrawing" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

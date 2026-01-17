@@ -18,6 +18,7 @@ import com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui.utils.Bitmap
 import com.kazumaproject.hiraganahandwritekeyboard.input_method.domain.KeyboardAction
 import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.ImeController
 import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.KeyboardPlugin
+import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.widgets.CursorNavView
 import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.widgets.KeyboardKeyRowsView
 import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.widgets.KeyboardKeySpec
 import kotlinx.coroutines.CoroutineScope
@@ -30,28 +31,6 @@ import kotlinx.coroutines.withContext
 import timber.log.Timber
 import kotlin.math.max
 
-/**
- * 要件実装:
- * - onStrokeCommitted 毎に推論 → IME の Preedit 末尾を「置換」で更新（InputTextを送る）
- * - 反対側に触れた瞬間（onStrokeStarted）に、それまでの末尾置換を「確定」（= 置換対象から外す）
- *   かつ 直前側 DrawingView をクリア
- * - ConcurrentModificationException 対策として export は Main スレッドで行う
- *
- * 拡張:
- * - 各 DrawingView の下に TopK 候補（percent>0）を横リスト表示
- * - ユーザーがタップした候補を「採用」し、IME末尾置換に反映（active side のみ）
- *
- * 修正案A:
- * - 候補を submitList した直後に必ず先頭を表示
- *
- * UI変更:
- * - keyRows を dualDrawing の左右に配置
- *   - デフォルト: 左=Clear, 右=Backspace/Space/Enter（右は縦積み）
- *
- * 表示変更:
- * - キーの text をラベルからアイコン文字へ
- *   - Clear: ⟲ / Backspace: ⌫ / Space: ␣ / Enter: ⏎
- */
 class HandwriteKeyboardPlugin : KeyboardPlugin {
 
     override val id: String = "handwrite"
@@ -82,13 +61,118 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
     private var adapterA: CtcCandidateAdapter? = null
     private var adapterB: CtcCandidateAdapter? = null
 
+    // ---- keyRows refs (for runtime switching) ----
+    private var keyRowsLeftRef: KeyboardKeyRowsView? = null
+    private var keyRowsRightRef: KeyboardKeyRowsView? = null
+    private var keyRowsBottomRef: KeyboardKeyRowsView? = null
+
+    // ---- keep last view/controller for immediate reconfigure ----
+    private var lastDualRef: DualDrawingComposerView? = null
+    private var lastControllerRef: ImeController? = null
+
+    // ---------------- key rows mode ----------------
+
+    enum class KeyRowsMode {
+        LEFT_ONLY,
+        RIGHT_ONLY,
+        BOTH,
+
+        // ★追加：dualDrawing の下だけに出す
+        BOTTOM_ONLY,
+
+        // ★追加：左右 + 下（全部出す）
+        BOTH_WITH_BOTTOM,
+
+        NONE
+    }
+
+    object HandwriteUiConfig {
+        @Volatile
+        var keyRowsMode: KeyRowsMode = KeyRowsMode.BOTTOM_ONLY
+    }
+
+    fun setKeyRowsMode(mode: KeyRowsMode) {
+        HandwriteUiConfig.keyRowsMode = mode
+
+        applyKeyRowsMode(
+            left = keyRowsLeftRef,
+            right = keyRowsRightRef,
+            bottom = keyRowsBottomRef,
+            mode = mode
+        )
+
+        val dual = lastDualRef
+        val controller = lastControllerRef
+        val left = keyRowsLeftRef
+        val right = keyRowsRightRef
+        val bottom = keyRowsBottomRef
+        if (dual != null && controller != null && left != null && right != null) {
+            configureKeyRows(
+                mode = mode,
+                leftRows = left,
+                rightRows = right,
+                bottomRows = bottom,
+                dual = dual,
+                controller = controller
+            )
+        }
+    }
+
+    private fun applyKeyRowsMode(
+        left: KeyboardKeyRowsView?,
+        right: KeyboardKeyRowsView?,
+        bottom: KeyboardKeyRowsView?,
+        mode: KeyRowsMode
+    ) {
+        when (mode) {
+            KeyRowsMode.LEFT_ONLY -> {
+                left?.visibility = View.VISIBLE
+                right?.visibility = View.GONE
+                bottom?.visibility = View.GONE
+            }
+
+            KeyRowsMode.RIGHT_ONLY -> {
+                left?.visibility = View.GONE
+                right?.visibility = View.VISIBLE
+                bottom?.visibility = View.GONE
+            }
+
+            KeyRowsMode.BOTH -> {
+                left?.visibility = View.VISIBLE
+                right?.visibility = View.VISIBLE
+                bottom?.visibility = View.GONE
+            }
+
+            KeyRowsMode.BOTTOM_ONLY -> {
+                left?.visibility = View.GONE
+                right?.visibility = View.GONE
+                bottom?.visibility = View.VISIBLE
+            }
+
+            KeyRowsMode.BOTH_WITH_BOTTOM -> {
+                left?.visibility = View.VISIBLE
+                right?.visibility = View.VISIBLE
+                bottom?.visibility = View.VISIBLE
+            }
+
+            KeyRowsMode.NONE -> {
+                left?.visibility = View.GONE
+                right?.visibility = View.GONE
+                bottom?.visibility = View.GONE
+            }
+        }
+    }
+
     override fun createView(parent: ViewGroup, controller: ImeController): View {
         val v =
             LayoutInflater.from(parent.context).inflate(R.layout.keyboard_handwrite, parent, false)
 
         val dual: DualDrawingComposerView = v.findViewById(R.id.dualDrawing)
+        lastDualRef = dual
+        lastControllerRef = controller
 
-        // --- init recognizer lazily ---
+        dual.setStrokeWidthPx(24f)
+
         if (recognizer == null) {
             recognizer = HiraCtcRecognizer(
                 context = parent.context.applicationContext,
@@ -98,7 +182,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             )
         }
 
-        // --- setup candidate lists (horizontal) ---
         adapterA = CtcCandidateAdapter { c ->
             onCandidateTapped(dual, DualDrawingComposerView.Side.A, c, controller)
         }
@@ -114,97 +197,38 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         dual.candidateListA.adapter = adapterA
         dual.candidateListB.adapter = adapterB
 
-        // 初期は空（先頭スクロールも含めて統一）
         submitCandidates(dual, DualDrawingComposerView.Side.A, emptyList())
         submitCandidates(dual, DualDrawingComposerView.Side.B, emptyList())
 
-        // --- shared action keys (Left/Right) ---
         val leftRows: KeyboardKeyRowsView = v.findViewById(R.id.keyRowsLeft)
         val rightRows: KeyboardKeyRowsView = v.findViewById(R.id.keyRowsRight)
+        val bottomRows: KeyboardKeyRowsView? = v.findViewById(R.id.keyRowsBottom)
 
-        // 左: Clear（縦積み。1キー=1行）
-        leftRows.setRows(
-            rows = listOf(
-                listOf(
-                    KeyboardKeySpec(
-                        keyId = "clear",
-                        text = "⟲",
-                        onClick = {
-                            dual.clearBoth()
-                            cancelInferJobs()
+        keyRowsLeftRef = leftRows
+        keyRowsRightRef = rightRows
+        keyRowsBottomRef = bottomRows
 
-                            submitCandidates(dual, DualDrawingComposerView.Side.A, emptyList())
-                            submitCandidates(dual, DualDrawingComposerView.Side.B, emptyList())
+        val mode = HandwriteUiConfig.keyRowsMode
 
-                            activePreviewLen = 0
+        applyKeyRowsMode(leftRows, rightRows, bottomRows, mode)
 
-                            // generation を進めて古い推論を無効化
-                            genA++
-                            genB++
-                        }
-                    )
-                )
-            ),
+        configureKeyRows(
+            mode = mode,
+            leftRows = leftRows,
+            rightRows = rightRows,
+            bottomRows = bottomRows,
+            dual = dual,
             controller = controller
         )
 
-        // 右: Backspace / Space / Enter（縦積み。1キー=1行）
-        rightRows.setRows(
-            rows = listOf(
-                listOf(
-                    KeyboardKeySpec(
-                        keyId = "backspace",
-                        text = "⌫",
-                        onClick = {
-                            it.dispatch(KeyboardAction.Backspace)
-
-                            // 末尾置換スロットの追従
-                            if (controller.isPreedit && activePreviewLen > 0) {
-                                activePreviewLen = (activePreviewLen - 1).coerceAtLeast(0)
-                            }
-                        }
-                    )
-                ),
-                listOf(
-                    KeyboardKeySpec(
-                        keyId = "space",
-                        text = "␣",
-                        onClick = {
-                            it.dispatch(KeyboardAction.InputText(" "))
-                            // space まで巻き戻して消さないため確定扱い
-                            activePreviewLen = 0
-                        }
-                    )
-                ),
-                listOf(
-                    KeyboardKeySpec(
-                        keyId = "enter",
-                        text = "⏎",
-                        onClick = {
-                            it.dispatch(KeyboardAction.Enter)
-                            // Enter は確定寄り
-                            activePreviewLen = 0
-                        }
-                    )
-                )
-            ),
-            controller = controller
-        )
-
-        // --- DualDrawing callbacks ---
         dual.onStrokeStarted = { side ->
             if (side != activeSide) {
-                // 反対側に触れた瞬間に「確定」
                 activePreviewLen = 0
 
-                // 直前側をクリア（要件）
                 val prev = activeSide
                 drawingViewFor(dual, prev).clearCanvas()
-
-                // 直前側の候補もクリア
                 submitCandidates(dual, prev, emptyList())
 
-                // 直前側の推論を無効化
                 bumpGeneration(prev)
                 cancelInferJobFor(prev)
 
@@ -222,6 +246,181 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
     override fun onDestroy() {
         cancelInferJobs()
         pluginJob.cancel()
+
+        keyRowsLeftRef = null
+        keyRowsRightRef = null
+        keyRowsBottomRef = null
+        lastDualRef = null
+        lastControllerRef = null
+    }
+
+    // ---------------- key rows building ----------------
+
+    private fun configureKeyRows(
+        mode: KeyRowsMode,
+        leftRows: KeyboardKeyRowsView,
+        rightRows: KeyboardKeyRowsView,
+        bottomRows: KeyboardKeyRowsView?,
+        dual: DualDrawingComposerView,
+        controller: ImeController
+    ) {
+        fun clearKey() = KeyboardKeySpec.ButtonKey(
+            keyId = "clear",
+            text = "⟲",
+            onClick = {
+                dual.clearBoth()
+                cancelInferJobs()
+
+                submitCandidates(dual, DualDrawingComposerView.Side.A, emptyList())
+                submitCandidates(dual, DualDrawingComposerView.Side.B, emptyList())
+
+                activePreviewLen = 0
+                genA++
+                genB++
+            },
+            repeatOnLongPress = false
+        )
+
+        // CursorNavView：上下フリックも dispatch する
+        fun cursorNavKey() = KeyboardKeySpec.CustomViewKey(
+            keyId = "cursor_nav",
+            minHeightDp = 44,
+            createView = { ctx, _parent, c ->
+                CursorNavView(ctx).apply {
+                    layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    )
+
+                    setListener(object : CursorNavView.Listener {
+                        override fun onAction(
+                            side: CursorNavView.Side,
+                            action: CursorNavView.Action
+                        ) {
+                            when (action) {
+                                CursorNavView.Action.TAP,
+                                CursorNavView.Action.LONG_TAP -> {
+                                    if (side == CursorNavView.Side.LEFT) {
+                                        c.dispatch(KeyboardAction.MoveCursor(-1))
+                                    } else {
+                                        c.dispatch(KeyboardAction.MoveCursor(+1))
+                                    }
+                                }
+
+                                CursorNavView.Action.FLICK_UP,
+                                CursorNavView.Action.LONG_FLICK_UP -> {
+                                    c.dispatch(KeyboardAction.MoveCursorVertical(-1))
+                                }
+
+                                CursorNavView.Action.FLICK_DOWN,
+                                CursorNavView.Action.LONG_FLICK_DOWN -> {
+                                    c.dispatch(KeyboardAction.MoveCursorVertical(+1))
+                                }
+                            }
+                        }
+                    })
+                }
+            }
+        )
+
+        fun backspaceKey() = KeyboardKeySpec.ButtonKey(
+            keyId = "backspace",
+            text = "⌫",
+            onClick = {
+                it.dispatch(KeyboardAction.Backspace)
+                if (controller.isPreedit && activePreviewLen > 0) {
+                    activePreviewLen = (activePreviewLen - 1).coerceAtLeast(0)
+                }
+            },
+            repeatOnLongPress = true,
+            repeatIntervalMs = 60L,
+            onFlickUp = { it.dispatch(KeyboardAction.MoveCursorVertical(-1)) },
+            onFlickDown = { it.dispatch(KeyboardAction.MoveCursorVertical(+1)) }
+        )
+
+        fun spaceKey() = KeyboardKeySpec.ButtonKey(
+            keyId = "space",
+            text = "␣",
+            onClick = {
+                it.dispatch(KeyboardAction.InputText(" "))
+                activePreviewLen = 0
+            },
+            repeatOnLongPress = false
+        )
+
+        fun enterKey() = KeyboardKeySpec.ButtonKey(
+            keyId = "enter",
+            text = "⏎",
+            onClick = {
+                it.dispatch(KeyboardAction.Enter)
+                activePreviewLen = 0
+            },
+            repeatOnLongPress = false
+        )
+
+        val allKeysVertical = listOf(
+            listOf(clearKey()),
+            listOf(cursorNavKey()),
+            listOf(backspaceKey()),
+            listOf(spaceKey()),
+            listOf(enterKey())
+        )
+
+        // ★下側に出す用：横一列（必要なら2行に増やしてOK）
+        val allKeysHorizontal = listOf(
+            listOf(
+                clearKey(),
+                cursorNavKey(),
+                backspaceKey(),
+                spaceKey(),
+                enterKey()
+            )
+        )
+
+        val leftOnly = listOf(listOf(clearKey()))
+        val rightOnly = listOf(
+            listOf(backspaceKey()),
+            listOf(spaceKey()),
+            listOf(enterKey())
+        )
+
+        when (mode) {
+            KeyRowsMode.BOTH -> {
+                leftRows.setRows(rows = leftOnly, controller = controller)
+                rightRows.setRows(rows = rightOnly, controller = controller)
+                bottomRows?.setRows(rows = emptyList(), controller = controller)
+            }
+
+            KeyRowsMode.LEFT_ONLY -> {
+                leftRows.setRows(rows = allKeysVertical, controller = controller)
+                rightRows.setRows(rows = emptyList(), controller = controller)
+                bottomRows?.setRows(rows = emptyList(), controller = controller)
+            }
+
+            KeyRowsMode.RIGHT_ONLY -> {
+                rightRows.setRows(rows = allKeysVertical, controller = controller)
+                leftRows.setRows(rows = emptyList(), controller = controller)
+                bottomRows?.setRows(rows = emptyList(), controller = controller)
+            }
+
+            KeyRowsMode.BOTTOM_ONLY -> {
+                leftRows.setRows(rows = emptyList(), controller = controller)
+                rightRows.setRows(rows = emptyList(), controller = controller)
+                bottomRows?.setRows(rows = allKeysHorizontal, controller = controller)
+            }
+
+            KeyRowsMode.BOTH_WITH_BOTTOM -> {
+                leftRows.setRows(rows = leftOnly, controller = controller)
+                rightRows.setRows(rows = rightOnly, controller = controller)
+                bottomRows?.setRows(rows = allKeysHorizontal, controller = controller)
+            }
+
+            KeyRowsMode.NONE -> {
+                leftRows.setRows(rows = emptyList(), controller = controller)
+                rightRows.setRows(rows = emptyList(), controller = controller)
+                bottomRows?.setRows(rows = emptyList(), controller = controller)
+            }
+        }
     }
 
     // ---------------- candidate tap ----------------
@@ -235,11 +434,9 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         if (candidate.text.isBlank()) return
         if (candidate.percent <= 0.0) return
 
-        // このsideの古い推論結果で上書きされないよう generation を進める
         bumpGeneration(side)
         cancelInferJobFor(side)
 
-        // active side のときだけ末尾置換を更新
         if (side != activeSide) return
         applyReplaceTailToIme(controller, candidate.text)
     }
@@ -269,19 +466,16 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
 
             val strokeWidthPx = DEFAULT_STROKE_WIDTH_PX.toFloat().coerceAtLeast(1f)
 
-            // export は Main
             val whiteBmp = withContext(Dispatchers.Main.immediate) {
                 exportForInferOnMain(dv, strokeWidthPx)
             }
 
-            // 推論は Default
             val candidates = withContext(Dispatchers.Default) {
                 runInferTopK(whiteBmp, topK = HandwriteCommitConfig.topK)
             }
 
             if (!isLatest(side, token)) return@launch
 
-            // percent>0 のみ表示
             val filtered = candidates.filter { it.text.isNotBlank() && it.percent > 0.0 }
 
             Timber.d("scheduleInferReplaceAndShowCandidates candidates: $candidates")
@@ -289,7 +483,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
 
             submitCandidates(dual, side, filtered)
 
-            // 末尾置換は active side のみ
             if (side != activeSide) return@launch
 
             val top1 = filtered.firstOrNull()?.text?.trim().orEmpty()
@@ -301,9 +494,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         if (side == DualDrawingComposerView.Side.A) inferJobA = newJob else inferJobB = newJob
     }
 
-    /**
-     * 修正案A: submitList の commitCallback + post で必ず先頭を表示
-     */
     private fun submitCandidates(
         dual: DualDrawingComposerView,
         side: DualDrawingComposerView.Side,
@@ -318,9 +508,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         }
     }
 
-    /**
-     * IME（Preedit）の末尾を「置換」する。
-     */
     private fun applyReplaceTailToIme(controller: ImeController, newText: String) {
         if (!controller.isPreedit) {
             controller.dispatch(KeyboardAction.InputText(newText))

@@ -31,18 +31,18 @@ class NumberKeyboardPlugin : KeyboardPlugin {
                     digit("7"), digit("8"), digit("9")
                 ),
                 listOf(
-                    KeyboardKeySpec(
+                    KeyboardKeySpec.ButtonKey(
                         keyId = "space",
                         text = "Space",
                         onClick = { it.dispatch(KeyboardAction.InputText(" ")) }
                     ),
                     digit("0"),
-                    KeyboardKeySpec(
+                    KeyboardKeySpec.ButtonKey(
                         keyId = "enter",
                         text = "Enter",
                         onClick = { it.dispatch(KeyboardAction.Enter) }
                     ),
-                    KeyboardKeySpec(
+                    KeyboardKeySpec.ButtonKey(
                         keyId = "backspace",
                         text = "⌫",
                         onClick = { it.dispatch(KeyboardAction.Backspace) }
@@ -56,7 +56,7 @@ class NumberKeyboardPlugin : KeyboardPlugin {
     }
 
     private fun digit(d: String): KeyboardKeySpec {
-        return KeyboardKeySpec(
+        return KeyboardKeySpec.ButtonKey(
             keyId = "digit_$d",
             text = d,
             onClick = { it.dispatch(KeyboardAction.InputText(d)) }

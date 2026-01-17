@@ -15,7 +15,7 @@
         <com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui.DrawingView
             android:id="@+id/drawingViewA"
             android:layout_width="match_parent"
-            android:layout_height="160dp"
+            android:layout_height="140dp"
             android:background="@android:color/white" />
 
         <androidx.recyclerview.widget.RecyclerView
@@ -36,7 +36,7 @@
         <com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui.DrawingView
             android:id="@+id/drawingViewB"
             android:layout_width="match_parent"
-            android:layout_height="160dp"
+            android:layout_height="140dp"
             android:background="@android:color/white" />
 
         <androidx.recyclerview.widget.RecyclerView

@@ -95,13 +95,6 @@
                 android:id="@+id/keyboardContainer"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content" />
-
-            <!-- ナビゲーション：左右2ボタンを内包するカスタムView（タップ/フリック/長押し対応） -->
-            <com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.widgets.CursorNavView
-                android:id="@+id/cursorNavView"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="center"/>
         </LinearLayout>
 
         <!-- リサイズ用ハンドル（8点） -->

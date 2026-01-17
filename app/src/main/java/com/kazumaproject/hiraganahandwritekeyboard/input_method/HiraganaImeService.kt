@@ -30,7 +30,6 @@ import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.KeyboardRegis
 import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.adapters.CandidateAdapter
 import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.keyboard_plugins.HandwriteKeyboardPlugin
 import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.keyboard_plugins.NumberKeyboardPlugin
-import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.widgets.CursorNavView
 import kotlin.math.max
 import kotlin.math.min
 
@@ -90,9 +89,6 @@ class HiraganaImeService : InputMethodService() {
 
     // topRow を候補エリア内で表示/非表示する
     private var topRow: ViewGroup? = null
-
-    // nav (custom)
-    private var cursorNavView: CursorNavView? = null
 
     private var keyboardTypeRow: LinearLayout? = null
     private var keyboardContainer: ViewGroup? = null
@@ -255,6 +251,16 @@ class HiraganaImeService : InputMethodService() {
                 }
 
                 KeyboardAction.Noop -> Unit
+                is KeyboardAction.MoveCursorVertical -> {
+                    if (inputMode == InputMode.PREEDIT && inCandidateMode) {
+                        exitCandidateMode(restorePreview = true, renderAfter = false)
+                    }
+
+                    // 元仕様：Direct または Preedit で composing が空のときだけ上下移動
+                    if (inputMode == InputMode.DIRECT || (inputMode == InputMode.PREEDIT && composing.isEmpty())) {
+                        moveCursorVerticalInEditor(action.delta)
+                    }
+                }
             }
         }
     }
@@ -281,59 +287,6 @@ class HiraganaImeService : InputMethodService() {
         // candidates
         candidateRecycler = v.findViewById(R.id.candidateRecycler)
         setupCandidatesRecycler()
-
-        // nav (custom)
-        cursorNavView = v.findViewById(R.id.cursorNavView)
-        cursorNavView?.setListener(object : CursorNavView.Listener {
-            override fun onAction(side: CursorNavView.Side, action: CursorNavView.Action) {
-                when (action) {
-                    // ----- 単発 -----
-                    CursorNavView.Action.TAP -> {
-                        if (side == CursorNavView.Side.LEFT) {
-                            controller.dispatch(KeyboardAction.MoveCursor(-1))
-                        } else {
-                            controller.dispatch(KeyboardAction.MoveCursor(+1))
-                        }
-                    }
-
-                    CursorNavView.Action.FLICK_UP -> {
-                        // 要件：Direct または Preedit で composing が空の場合のみ「カーソル上」
-                        if (inputMode == InputMode.DIRECT || (inputMode == InputMode.PREEDIT && composing.isEmpty())) {
-                            moveCursorVerticalInEditor(-1)
-                        }
-                    }
-
-                    CursorNavView.Action.FLICK_DOWN -> {
-                        // 要件：Direct または Preedit で composing が空の場合のみ「カーソル下」
-                        if (inputMode == InputMode.DIRECT || (inputMode == InputMode.PREEDIT && composing.isEmpty())) {
-                            moveCursorVerticalInEditor(+1)
-                        }
-                    }
-
-                    // ----- 長押し（押下中リピートで飛んでくる） -----
-                    CursorNavView.Action.LONG_TAP -> {
-                        // 長押しタップ：左右カーソルをリピート
-                        if (side == CursorNavView.Side.LEFT) {
-                            controller.dispatch(KeyboardAction.MoveCursor(-1))
-                        } else {
-                            controller.dispatch(KeyboardAction.MoveCursor(+1))
-                        }
-                    }
-
-                    CursorNavView.Action.LONG_FLICK_UP -> {
-                        if (inputMode == InputMode.DIRECT || (inputMode == InputMode.PREEDIT && composing.isEmpty())) {
-                            moveCursorVerticalInEditor(-1)
-                        }
-                    }
-
-                    CursorNavView.Action.LONG_FLICK_DOWN -> {
-                        if (inputMode == InputMode.DIRECT || (inputMode == InputMode.PREEDIT && composing.isEmpty())) {
-                            moveCursorVerticalInEditor(+1)
-                        }
-                    }
-                }
-            }
-        })
 
         keyboardTypeRow = v.findViewById(R.id.keyboardTypeRow)
         keyboardContainer = v.findViewById(R.id.keyboardContainer)
@@ -833,8 +786,6 @@ class HiraganaImeService : InputMethodService() {
     private fun updateInputModeUi() {
         inputModeBtn?.text = if (inputMode == InputMode.PREEDIT) "Preedit" else "Direct"
 
-        cursorNavView?.visibility = View.VISIBLE
-
         if (inputMode == InputMode.DIRECT) {
             inCandidateMode = false
             candidatePreviewBaseText = null
@@ -1226,14 +1177,12 @@ class HiraganaImeService : InputMethodService() {
         handleBottomRight?.visibility = vis
 
         keyboardContainer?.alpha = if (enabled) 0.6f else 1.0f
-        cursorNavView?.alpha = if (enabled) 0.6f else 1.0f
         keyboardTypeRow?.alpha = if (enabled) 0.6f else 1.0f
         candidateRecycler?.alpha = if (enabled) 0.6f else 1.0f
         topRow?.alpha = if (enabled) 0.6f else 1.0f
         toggleKeyboardTopRowBtn?.alpha = if (enabled) 0.6f else 1.0f
 
         setChildrenEnabled(keyboardContainer, !enabled)
-        setChildrenEnabled(cursorNavView, !enabled)
         setChildrenEnabled(keyboardTypeRow, !enabled)
 
         candidateRecycler?.isEnabled = !enabled
