@@ -6,7 +6,6 @@ import android.graphics.Color
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.widget.Button
 import androidx.core.graphics.createBitmap
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.kazumaproject.hiraganahandwritekeyboard.R
@@ -19,6 +18,8 @@ import com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui.utils.Bitmap
 import com.kazumaproject.hiraganahandwritekeyboard.input_method.domain.KeyboardAction
 import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.ImeController
 import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.KeyboardPlugin
+import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.widgets.KeyboardKeyRowsView
+import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.widgets.KeyboardKeySpec
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -26,6 +27,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import timber.log.Timber
 import kotlin.math.max
 
 /**
@@ -78,12 +80,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
 
         val dual: DualDrawingComposerView = v.findViewById(R.id.dualDrawing)
 
-        val btnSpace: Button = v.findViewById(R.id.btnSpace)
-        val btnEnter: Button = v.findViewById(R.id.btnEnter)
-        val btnBackspace: Button = v.findViewById(R.id.btnBackspace)
-        val btnClear: Button = v.findViewById(R.id.btnClear)
-        val btnA: Button = v.findViewById(R.id.btnA)
-
         // --- init recognizer lazily ---
         if (recognizer == null) {
             recognizer = HiraCtcRecognizer(
@@ -124,29 +120,50 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         submitCandidates(dual, DualDrawingComposerView.Side.A, emptyList())
         submitCandidates(dual, DualDrawingComposerView.Side.B, emptyList())
 
-        // --- buttons: forward to IME controller ---
-        btnSpace.setOnClickListener { controller.dispatch(KeyboardAction.InputText(" ")) }
-        btnEnter.setOnClickListener { controller.dispatch(KeyboardAction.Enter) }
-        btnBackspace.setOnClickListener { controller.dispatch(KeyboardAction.Backspace) }
+        // --- shared action keys (Space/Enter/Backspace/Clear) ---
+        val actionRows: KeyboardKeyRowsView = v.findViewById(R.id.keyRows)
 
-        btnClear.setOnClickListener {
-            dual.clearBoth()
-            cancelInferJobs()
+        actionRows.setRows(
+            rows = listOf(
+                listOf(
+                    KeyboardKeySpec(
+                        keyId = "space",
+                        text = "Space",
+                        onClick = { it.dispatch(KeyboardAction.InputText(" ")) }
+                    ),
+                    KeyboardKeySpec(
+                        keyId = "enter",
+                        text = "Enter",
+                        onClick = { it.dispatch(KeyboardAction.Enter) }
+                    ),
+                    KeyboardKeySpec(
+                        keyId = "backspace",
+                        text = "⌫",
+                        onClick = { it.dispatch(KeyboardAction.Backspace) }
+                    ),
+                    KeyboardKeySpec(
+                        keyId = "clear",
+                        text = "Clear",
+                        onClick = {
+                            dual.clearBoth()
+                            cancelInferJobs()
 
-            // 候補も消す
-            submitCandidates(dual, DualDrawingComposerView.Side.A, emptyList())
-            submitCandidates(dual, DualDrawingComposerView.Side.B, emptyList())
+                            // 候補も消す
+                            submitCandidates(dual, DualDrawingComposerView.Side.A, emptyList())
+                            submitCandidates(dual, DualDrawingComposerView.Side.B, emptyList())
 
-            // 「置換中」だった末尾スロットも破棄した扱いにする（以後 Backspace で消さない）
-            activePreviewLen = 0
+                            // 「置換中」だった末尾スロットも破棄した扱いにする（以後 Backspace で消さない）
+                            activePreviewLen = 0
 
-            // generation を進めて古い推論を無効化
-            genA++
-            genB++
-        }
-
-        // btnA は削除しない（例として「あ」）
-        btnA.setOnClickListener { controller.dispatch(KeyboardAction.InputText("あ")) }
+                            // generation を進めて古い推論を無効化
+                            genA++
+                            genB++
+                        }
+                    )
+                )
+            ),
+            controller = controller
+        )
 
         // --- DualDrawing callbacks ---
         dual.onStrokeStarted = { side ->
@@ -242,6 +259,9 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
 
             // percent>0 のみ表示（要件）
             val filtered = candidates.filter { it.text.isNotBlank() && it.percent > 0.0 }
+
+            Timber.d("scheduleInferReplaceAndShowCandidates candidates: $candidates")
+            Timber.d("scheduleInferReplaceAndShowCandidates filtered: $filtered")
 
             // UIへ反映（A案：反映後に必ず先頭へ）
             submitCandidates(dual, side, filtered)

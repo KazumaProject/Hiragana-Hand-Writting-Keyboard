@@ -12,48 +12,11 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content" />
 
-    <!-- 操作ボタン -->
-    <LinearLayout
-        android:id="@+id/handwriteButtonsRow"
+    <!-- 共通キー行（Space/Enter/Backspace/Clear） -->
+    <com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.widgets.KeyboardKeyRowsView
+        android:id="@+id/keyRows"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:orientation="horizontal">
-
-        <Button
-            android:id="@+id/btnA"
-            android:layout_width="0dp"
-            android:layout_height="48dp"
-            android:layout_weight="1"
-            android:text="あ" />
-
-        <Button
-            android:id="@+id/btnSpace"
-            android:layout_width="0dp"
-            android:layout_height="48dp"
-            android:layout_weight="1"
-            android:text="Space" />
-
-        <Button
-            android:id="@+id/btnEnter"
-            android:layout_width="0dp"
-            android:layout_height="48dp"
-            android:layout_weight="1"
-            android:text="Enter" />
-
-        <Button
-            android:id="@+id/btnBackspace"
-            android:layout_width="0dp"
-            android:layout_height="48dp"
-            android:layout_weight="1"
-            android:text="⌫" />
-
-        <Button
-            android:id="@+id/btnClear"
-            android:layout_width="0dp"
-            android:layout_height="48dp"
-            android:layout_weight="1"
-            android:text="Clear" />
-    </LinearLayout>
+        android:layout_marginTop="8dp" />
 
 </LinearLayout>

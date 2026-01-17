@@ -627,7 +627,6 @@ class HiraganaImeService : InputMethodService() {
 
         if (currentKeyboardId == newPlugin.id && currentPlugin != null) {
             updateKeyboardUiState()
-            bindActionButtonsFromKeyboardView(container)
             updateActionKeyLabels()
             return
         }
@@ -647,8 +646,7 @@ class HiraganaImeService : InputMethodService() {
 
         newPlugin.onSelected()
         updateKeyboardUiState()
-
-        bindActionButtonsFromKeyboardView(container)
+        
         updateActionKeyLabels()
     }
 
@@ -658,15 +656,6 @@ class HiraganaImeService : InputMethodService() {
             btn.isEnabled = !prefs.getBoolean(KEY_RESIZE_MODE, false)
             btn.alpha = if (selected) 1.0f else 0.6f
         }
-    }
-
-    /**
-     * 現在のキーボードViewから Space/Enter を拾ってラベル変更できるようにする。
-     * （存在しない場合は null のまま）
-     */
-    private fun bindActionButtonsFromKeyboardView(container: ViewGroup) {
-        btnSpaceInKeyboard = container.findViewById<Button?>(R.id.btnSpace)
-        btnEnterInKeyboard = container.findViewById<Button?>(R.id.btnEnter)
     }
 
     // ---------------- Input Mode ----------------
