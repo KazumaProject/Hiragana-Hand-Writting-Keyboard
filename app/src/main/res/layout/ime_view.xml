@@ -35,7 +35,7 @@
                     android:overScrollMode="never"
                     android:visibility="gone" />
 
-                <!-- 上段：ステータス + モード切替 + リサイズ（候補が無い時はここを表示） -->
+                <!-- 上段：ステータス + モード切替 + リサイズ + (TOPROWモード時のみ)プラグイン切替 -->
                 <LinearLayout
                     android:id="@+id/topRow"
                     android:layout_width="match_parent"
@@ -67,18 +67,28 @@
                         android:layout_height="wrap_content"
                         android:minHeight="36dp"
                         android:text="Resize" />
+
+                    <!-- ★追加：TOPROWモードでのみ表示される「プラグイン切替トグル」 -->
+                    <Button
+                        android:id="@+id/btnToggleKeyboardTopRow"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minHeight="36dp"
+                        android:text="Keyboard" />
+
                 </LinearLayout>
 
             </FrameLayout>
 
-            <!-- キーボードタイプ切替（ここに動的にボタンを生成する） -->
+            <!-- キーボードタイプ切替（タブモードでのみ表示） -->
             <LinearLayout
                 android:id="@+id/keyboardTypeRow"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:paddingTop="6dp"
-                android:paddingBottom="6dp" />
+                android:paddingBottom="6dp"
+                android:visibility="gone" />
 
             <!-- Preedit時のみ：左右カーソル -->
             <LinearLayout

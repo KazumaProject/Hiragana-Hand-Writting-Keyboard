@@ -45,11 +45,17 @@ class HiraganaImeService : InputMethodService() {
 
         // status 表示/非表示（デフォルト false）
         private const val KEY_SHOW_STATUS_TEXT = "show_status_text"
+
+        // キーボード切替UIモード（デフォルト: toprow）
+        private const val KEY_KEYBOARD_SELECTOR_MODE =
+            "keyboard_selector_mode" // "toprow" or "tabs"
     }
 
     private enum class InputMode { DIRECT, PREEDIT }
     private enum class HSide { NONE, LEFT, RIGHT }
     private enum class VSide { NONE, TOP, BOTTOM }
+
+    private enum class KeyboardSelectorMode { TOPROW, TABS }
 
     /**
      * プリエディット装飾の範囲モード
@@ -71,6 +77,11 @@ class HiraganaImeService : InputMethodService() {
     private var statusText: TextView? = null
     private var resizeModeBtn: Button? = null
     private var inputModeBtn: Button? = null
+
+    private var keyboardSelectorMode: KeyboardSelectorMode = KeyboardSelectorMode.TOPROW
+
+    // ★ TOPROWモード用の「トグルでキーボード切替」
+    private var toggleKeyboardTopRowBtn: Button? = null
 
     // candidates
     private var candidateRecycler: RecyclerView? = null
@@ -122,6 +133,8 @@ class HiraganaImeService : InputMethodService() {
     )
     private var currentKeyboardId: String = "handwrite"
     private var currentPlugin: KeyboardPlugin? = null
+
+    // tab buttons
     private val tabButtons = mutableMapOf<String, Button>()
 
     // 現在のキーボードView内の「Space / Enter」ボタン参照（存在すれば）
@@ -259,6 +272,9 @@ class HiraganaImeService : InputMethodService() {
         // topRow (候補エリア内)
         topRow = v.findViewById(R.id.topRow)
 
+        // ★ TOPROWトグルボタン
+        toggleKeyboardTopRowBtn = v.findViewById(R.id.btnToggleKeyboardTopRow)
+
         // candidates
         candidateRecycler = v.findViewById(R.id.candidateRecycler)
         setupCandidatesRecycler()
@@ -351,10 +367,24 @@ class HiraganaImeService : InputMethodService() {
         btnLeft.setOnClickListener { controller.dispatch(KeyboardAction.MoveCursor(-1)) }
         btnRight.setOnClickListener { controller.dispatch(KeyboardAction.MoveCursor(+1)) }
 
-        // keyboard registry UI
+        // keyboard registry init
         currentKeyboardId =
             prefs.getString(KEY_KEYBOARD_ID, registry.all().first().id) ?: registry.all().first().id
+
+        // タブUIはモードがTABSのときだけ構築しても良いが、
+        // 初期化として一度作っておけばモード切替時にすぐ表示できる
         buildKeyboardTypeTabs()
+
+        // selector mode init (default: TOPROW)
+        keyboardSelectorMode = loadKeyboardSelectorMode()
+        applyKeyboardSelectorModeUi()
+
+        // ★ TOPROWトグル：順送りでキーボード切替
+        toggleKeyboardTopRowBtn?.setOnClickListener {
+            selectNextKeyboardInRegistry()
+        }
+
+        // 初期キーボード選択（表示）
         selectKeyboard(currentKeyboardId, savePref = false)
 
         // status text visibility default = GONE
@@ -386,6 +416,8 @@ class HiraganaImeService : InputMethodService() {
 
         setStatus("Input started")
         updateInputModeUi()
+        applyKeyboardSelectorModeUi()
+        updateTopRowToggleLabel()
     }
 
     override fun onDestroy() {
@@ -422,6 +454,70 @@ class HiraganaImeService : InputMethodService() {
             sendDownUpKeyEvents(keyCode)
         }
         setStatus("Cursor moved (${if (delta < 0) "LEFT" else "RIGHT"}) x$times")
+    }
+
+    // ---------------- Keyboard Selector Mode ----------------
+
+    private fun loadKeyboardSelectorMode(): KeyboardSelectorMode {
+        return when (prefs.getString(KEY_KEYBOARD_SELECTOR_MODE, "toprow")) {
+            "tabs" -> KeyboardSelectorMode.TABS
+            else -> KeyboardSelectorMode.TOPROW
+        }
+    }
+
+    private fun saveKeyboardSelectorMode(mode: KeyboardSelectorMode) {
+        prefs.edit()
+            .putString(
+                KEY_KEYBOARD_SELECTOR_MODE,
+                if (mode == KeyboardSelectorMode.TABS) "tabs" else "toprow"
+            )
+            .apply()
+    }
+
+    /**
+     * 要件：
+     * - デフォルトは TOPROW（タブは出さない）
+     * - TABS のときは topRow のプラグイン切替ボタン（トグル）を出さない
+     */
+    private fun applyKeyboardSelectorModeUi() {
+        val tabs = keyboardTypeRow
+        val toggle = toggleKeyboardTopRowBtn
+
+        if (keyboardSelectorMode == KeyboardSelectorMode.TABS) {
+            tabs?.visibility = View.VISIBLE
+            toggle?.visibility = View.GONE
+        } else {
+            tabs?.visibility = View.GONE
+            toggle?.visibility = View.VISIBLE
+        }
+
+        updateKeyboardUiState()
+        updateTopRowToggleLabel()
+    }
+
+    /**
+     * TOPROWトグルの表示ラベルを、現在選択中のプラグインに合わせる
+     */
+    private fun updateTopRowToggleLabel() {
+        val btn = toggleKeyboardTopRowBtn ?: return
+        if (keyboardSelectorMode != KeyboardSelectorMode.TOPROW) return
+
+        val p = registry.getOrDefault(currentKeyboardId)
+        // 例: "Handwrite" / "Number"
+        btn.text = p.displayName
+    }
+
+    /**
+     * registry内を順送りで次のプラグインへ
+     */
+    private fun selectNextKeyboardInRegistry() {
+        val list = registry.all()
+        if (list.isEmpty()) return
+
+        val idx = list.indexOfFirst { it.id == currentKeyboardId }
+        val nextIdx = if (idx >= 0) (idx + 1) % list.size else 0
+        val nextId = list[nextIdx].id
+        selectKeyboard(nextId, savePref = true)
     }
 
     // ---------------- Candidate / TopRow visibility policy ----------------
@@ -627,6 +723,7 @@ class HiraganaImeService : InputMethodService() {
 
         if (currentKeyboardId == newPlugin.id && currentPlugin != null) {
             updateKeyboardUiState()
+            updateTopRowToggleLabel()
             updateActionKeyLabels()
             return
         }
@@ -646,11 +743,12 @@ class HiraganaImeService : InputMethodService() {
 
         newPlugin.onSelected()
         updateKeyboardUiState()
-        
+        updateTopRowToggleLabel()
         updateActionKeyLabels()
     }
 
     private fun updateKeyboardUiState() {
+        // タブモードのときだけ、タブUIを更新
         for ((id, btn) in tabButtons) {
             val selected = (id == currentKeyboardId)
             btn.isEnabled = !prefs.getBoolean(KEY_RESIZE_MODE, false)
@@ -1073,6 +1171,7 @@ class HiraganaImeService : InputMethodService() {
         keyboardTypeRow?.alpha = if (enabled) 0.6f else 1.0f
         candidateRecycler?.alpha = if (enabled) 0.6f else 1.0f
         topRow?.alpha = if (enabled) 0.6f else 1.0f
+        toggleKeyboardTopRowBtn?.alpha = if (enabled) 0.6f else 1.0f
 
         setChildrenEnabled(keyboardContainer, !enabled)
         setChildrenEnabled(navRow, !enabled)
@@ -1080,7 +1179,7 @@ class HiraganaImeService : InputMethodService() {
 
         candidateRecycler?.isEnabled = !enabled
         inputModeBtn?.isEnabled = !enabled
-
+        toggleKeyboardTopRowBtn?.isEnabled = !enabled
         resizeModeBtn?.text = if (enabled) "Done" else "Resize"
 
         updateKeyboardUiState()
