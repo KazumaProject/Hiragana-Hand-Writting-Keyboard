@@ -18,9 +18,8 @@ class DualDrawingComposerView @JvmOverloads constructor(
     val viewA: DrawingView get() = vb.drawingViewA
     val viewB: DrawingView get() = vb.drawingViewB
 
-    // ★追加: 候補リスト
-    val candidateListA: RecyclerView get() = vb.candidateListA
-    val candidateListB: RecyclerView get() = vb.candidateListB
+    // ★変更: 候補リストは 1つだけ
+    val candidateList: RecyclerView get() = vb.candidateList
 
     enum class Side { A, B }
 

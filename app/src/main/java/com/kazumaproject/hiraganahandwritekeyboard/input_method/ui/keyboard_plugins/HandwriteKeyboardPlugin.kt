@@ -1,3 +1,4 @@
+// app/src/main/java/com/kazumaproject/hiraganahandwritekeyboard/input_method/ui/keyboard_plugins/HandwriteKeyboardPlugin.kt
 package com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.keyboard_plugins
 
 import android.graphics.Bitmap
@@ -58,9 +59,8 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
     private var genA: Long = 0L
     private var genB: Long = 0L
 
-    // ---- candidate adapters ----
-    private var adapterA: CtcCandidateAdapter? = null
-    private var adapterB: CtcCandidateAdapter? = null
+    // ---- candidate adapter (single) ----
+    private var adapter: CtcCandidateAdapter? = null
 
     // ---- keyRows refs (for runtime switching) ----
     private var keyRowsLeftRef: KeyboardKeyRowsView? = null
@@ -73,6 +73,15 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
 
     // ---- computed key height ----
     private var computedKeyMinHeightDp: Int = 40 // 初期値（描画View計測後に上書き）
+
+    // ---- dynamic sizing ----
+    private var lastDrawingHeightPx: Int = 0
+    private var keyRowsLayoutListener: View.OnLayoutChangeListener? = null
+
+    // configureKeyRows() 内で構築した rows の行数を保存（将来キー構成を変えても追従）
+    private var rowsCountAllVertical: Int = 4
+    private var rowsCountLeftOnly: Int = 1
+    private var rowsCountRightOnly: Int = 3
 
     // ---------------- key rows mode ----------------
 
@@ -115,6 +124,19 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
                 controller = controller,
                 keyMinHeightDp = computedKeyMinHeightDp
             )
+
+            // mode を変えた直後に、現在の drawing 高さに合わせて再計算も走らせる
+            dual.post {
+                recalcKeyHeightsAndRebuild(
+                    rootView = dual,
+                    dual = dual,
+                    controller = controller,
+                    leftRows = left,
+                    rightRows = right,
+                    bottomRows = bottom,
+                    mode = mode
+                )
+            }
         }
     }
 
@@ -180,23 +202,14 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             )
         }
 
-        adapterA = CtcCandidateAdapter { c ->
-            onCandidateTapped(dual, DualDrawingComposerView.Side.A, c, controller)
+        // ---- single candidate list ----
+        adapter = CtcCandidateAdapter { c ->
+            onCandidateTapped(dual, activeSide, c, controller)
         }
-        adapterB = CtcCandidateAdapter { c ->
-            onCandidateTapped(dual, DualDrawingComposerView.Side.B, c, controller)
-        }
-
-        dual.candidateListA.layoutManager =
+        dual.candidateList.layoutManager =
             LinearLayoutManager(parent.context, LinearLayoutManager.HORIZONTAL, false)
-        dual.candidateListB.layoutManager =
-            LinearLayoutManager(parent.context, LinearLayoutManager.HORIZONTAL, false)
-
-        dual.candidateListA.adapter = adapterA
-        dual.candidateListB.adapter = adapterB
-
-        submitCandidates(dual, DualDrawingComposerView.Side.A, emptyList())
-        submitCandidates(dual, DualDrawingComposerView.Side.B, emptyList())
+        dual.candidateList.adapter = adapter
+        submitCandidates(emptyList())
 
         val leftRows: KeyboardKeyRowsView = v.findViewById(R.id.keyRowsLeft)
         val rightRows: KeyboardKeyRowsView = v.findViewById(R.id.keyRowsRight)
@@ -220,45 +233,51 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             keyMinHeightDp = computedKeyMinHeightDp
         )
 
-        // ---- ここが本題：drawingView の実高さに合わせて keyRows の高さとキー高さを再計算 ----
-        // drawingViewA/B が 200dp 固定でも、将来変えても追随できるようにする
+        // ---- 重要：IMEパネルのリサイズ等で高さが変わるたびに、DrawingView高さからキー高さを再計算 ----
+        // 監視対象は「DrawingView(A)」(候補バー48dpを含まない純粋な描画領域) とする
+        keyRowsLayoutListener?.let { l ->
+            dual.viewA.removeOnLayoutChangeListener(l)
+        }
+
+        keyRowsLayoutListener = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            dual.viewA.post {
+                recalcKeyHeightsAndRebuild(
+                    rootView = v,
+                    dual = dual,
+                    controller = controller,
+                    leftRows = leftRows,
+                    rightRows = rightRows,
+                    bottomRows = bottomRows,
+                    mode = HandwriteUiConfig.keyRowsMode
+                )
+            }
+        }
+        dual.viewA.addOnLayoutChangeListener(keyRowsLayoutListener)
+
+        // 初回も実測後に一発だけ合わせる
         v.post {
-            val drawingHeightPx = dual.viewA.height.takeIf { it > 0 }
-                ?: dual.viewA.layoutParams.height.takeIf { it > 0 }
-                ?: dpToPx(v, 200f)
-
-            // keyRowsLeft/right のコンテナ高さを drawing と同じにする（モードによって見えている方だけでもOK）
-            leftRows.layoutParams = leftRows.layoutParams.apply { height = drawingHeightPx }
-            rightRows.layoutParams = rightRows.layoutParams.apply { height = drawingHeightPx }
-
-            // 縦並び（5キー）でピッタリ埋めるために minHeightDp を算出
-            val drawingHeightDp = (drawingHeightPx / v.resources.displayMetrics.density)
-            val perKeyDp = (drawingHeightDp / 5f).toInt().coerceAtLeast(32) // 下限は好みで調整可
-            computedKeyMinHeightDp = perKeyDp
-
-            // 再構築（キーの minHeightDp が変わる）
-            applyKeyRowsMode(leftRows, rightRows, bottomRows, mode)
-            configureKeyRows(
-                mode = mode,
+            recalcKeyHeightsAndRebuild(
+                rootView = v,
+                dual = dual,
+                controller = controller,
                 leftRows = leftRows,
                 rightRows = rightRows,
                 bottomRows = bottomRows,
-                dual = dual,
-                controller = controller,
-                keyMinHeightDp = computedKeyMinHeightDp
+                mode = mode
             )
-
-            leftRows.requestLayout()
-            rightRows.requestLayout()
         }
 
         dual.onStrokeStarted = { side ->
             if (side != activeSide) {
+                // activeSide 切替時は「置換枠」をリセットし、候補をクリア
                 activePreviewLen = 0
 
+                // 前の側のキャンバスはクリア（要件どおり）
                 val prev = activeSide
                 drawingViewFor(dual, prev).clearCanvas()
-                submitCandidates(dual, prev, emptyList())
+
+                // 1つしか候補リストが無いので、切替時はクリア
+                submitCandidates(emptyList())
 
                 bumpGeneration(prev)
                 cancelInferJobFor(prev)
@@ -278,11 +297,87 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         cancelInferJobs()
         pluginJob.cancel()
 
+        // listener cleanup
+        val dual = lastDualRef
+        val l = keyRowsLayoutListener
+        if (dual != null && l != null) {
+            dual.viewA.removeOnLayoutChangeListener(l)
+        }
+        keyRowsLayoutListener = null
+        lastDrawingHeightPx = 0
+
         keyRowsLeftRef = null
         keyRowsRightRef = null
         keyRowsBottomRef = null
         lastDualRef = null
         lastControllerRef = null
+        adapter = null
+    }
+
+    // ---------------- dynamic recalc ----------------
+
+    private fun recalcKeyHeightsAndRebuild(
+        rootView: View,
+        dual: DualDrawingComposerView,
+        controller: ImeController,
+        leftRows: KeyboardKeyRowsView,
+        rightRows: KeyboardKeyRowsView,
+        bottomRows: KeyboardKeyRowsView?,
+        mode: KeyRowsMode
+    ) {
+        // DrawingView(A) の「実高さ」を優先（候補バーを含まない）
+        val drawingHeightPx = dual.viewA.height
+            .takeIf { it > 0 }
+            ?: dual.viewA.layoutParams.height.takeIf { it > 0 }
+            ?: dpToPx(rootView, 200f)
+
+        if (drawingHeightPx <= 0) return
+        if (drawingHeightPx == lastDrawingHeightPx && computedKeyMinHeightDp > 0) {
+            return
+        }
+        lastDrawingHeightPx = drawingHeightPx
+
+        val density = rootView.resources.displayMetrics.density
+        val drawingHeightDp = drawingHeightPx / density
+
+        val rowsCount = when (mode) {
+            KeyRowsMode.LEFT_ONLY, KeyRowsMode.RIGHT_ONLY -> rowsCountAllVertical
+            KeyRowsMode.BOTH, KeyRowsMode.BOTH_WITH_BOTTOM -> max(
+                rowsCountLeftOnly,
+                rowsCountRightOnly
+            )
+
+            KeyRowsMode.BOTTOM_ONLY -> 1
+            KeyRowsMode.NONE -> 1
+        }.coerceAtLeast(1)
+
+        val perKeyDp = (drawingHeightDp / rowsCount.toFloat())
+            .toInt()
+            .coerceAtLeast(32)
+
+        if (perKeyDp == computedKeyMinHeightDp) {
+            leftRows.requestLayout()
+            rightRows.requestLayout()
+            bottomRows?.requestLayout()
+            return
+        }
+
+        computedKeyMinHeightDp = perKeyDp
+
+        applyKeyRowsMode(leftRows, rightRows, bottomRows, mode)
+        configureKeyRows(
+            mode = mode,
+            leftRows = leftRows,
+            rightRows = rightRows,
+            bottomRows = bottomRows,
+            dual = dual,
+            controller = controller,
+            keyMinHeightDp = computedKeyMinHeightDp
+        )
+
+        leftRows.requestLayout()
+        rightRows.requestLayout()
+        bottomRows?.requestLayout()
     }
 
     // ---------------- key rows building ----------------
@@ -309,8 +404,8 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
                     activePreviewLen = (activePreviewLen - 1).coerceAtLeast(0)
                 }
 
-                submitCandidates(dual, DualDrawingComposerView.Side.A, emptyList())
-                submitCandidates(dual, DualDrawingComposerView.Side.B, emptyList())
+                // 1リストなのでここでクリア
+                submitCandidates(emptyList())
 
                 activePreviewLen = 0
                 genA++
@@ -328,7 +423,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT
                     )
-                    // ★キー高さに合わせる
                     setButtonHeightDp(keyMinHeightDp.toFloat())
                     setIconTextSizeSp(8f)
 
@@ -342,34 +436,26 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
                                 CursorNavView.Action.LONG_TAP -> {
                                     if (side == CursorNavView.Side.LEFT) {
                                         c.dispatch(KeyboardAction.MoveCursor(-1))
-                                        dual.clearBoth()
-                                        cancelInferJobs()
-                                        submitCandidates(dual, DualDrawingComposerView.Side.A, emptyList())
-                                        submitCandidates(dual, DualDrawingComposerView.Side.B, emptyList())
-
-                                        activePreviewLen = 0
-                                        genA++
-                                        genB++
                                     } else {
                                         c.dispatch(KeyboardAction.MoveCursor(+1))
-                                        dual.clearBoth()
-                                        cancelInferJobs()
-                                        submitCandidates(dual, DualDrawingComposerView.Side.A, emptyList())
-                                        submitCandidates(dual, DualDrawingComposerView.Side.B, emptyList())
-
-                                        activePreviewLen = 0
-                                        genA++
-                                        genB++
                                     }
+
+                                    dual.clearBoth()
+                                    cancelInferJobs()
+                                    submitCandidates(emptyList())
+
+                                    activePreviewLen = 0
+                                    genA++
+                                    genB++
                                 }
 
                                 CursorNavView.Action.FLICK_UP,
                                 CursorNavView.Action.LONG_FLICK_UP -> {
                                     c.dispatch(KeyboardAction.MoveCursorVertical(-1))
+
                                     dual.clearBoth()
                                     cancelInferJobs()
-                                    submitCandidates(dual, DualDrawingComposerView.Side.A, emptyList())
-                                    submitCandidates(dual, DualDrawingComposerView.Side.B, emptyList())
+                                    submitCandidates(emptyList())
 
                                     activePreviewLen = 0
                                     genA++
@@ -379,10 +465,10 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
                                 CursorNavView.Action.FLICK_DOWN,
                                 CursorNavView.Action.LONG_FLICK_DOWN -> {
                                     c.dispatch(KeyboardAction.MoveCursorVertical(+1))
+
                                     dual.clearBoth()
                                     cancelInferJobs()
-                                    submitCandidates(dual, DualDrawingComposerView.Side.A, emptyList())
-                                    submitCandidates(dual, DualDrawingComposerView.Side.B, emptyList())
+                                    submitCandidates(emptyList())
 
                                     activePreviewLen = 0
                                     genA++
@@ -407,9 +493,7 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
 
                 dual.clearBoth()
                 cancelInferJobs()
-
-                submitCandidates(dual, DualDrawingComposerView.Side.A, emptyList())
-                submitCandidates(dual, DualDrawingComposerView.Side.B, emptyList())
+                submitCandidates(emptyList())
 
                 activePreviewLen = 0
                 genA++
@@ -442,9 +526,7 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
 
                 dual.clearBoth()
                 cancelInferJobs()
-
-                submitCandidates(dual, DualDrawingComposerView.Side.A, emptyList())
-                submitCandidates(dual, DualDrawingComposerView.Side.B, emptyList())
+                submitCandidates(emptyList())
 
                 activePreviewLen = 0
                 genA++
@@ -454,7 +536,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         )
 
         val allKeysVertical = listOf(
-            //listOf(clearKey()),
             listOf(backspaceKey()),
             listOf(cursorNavKey()),
             listOf(spaceKey()),
@@ -463,7 +544,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
 
         val allKeysHorizontal = listOf(
             listOf(
-                //clearKey(),
                 backspaceKey(),
                 cursorNavKey(),
                 spaceKey(),
@@ -477,6 +557,11 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             listOf(spaceKey()),
             listOf(enterKey())
         )
+
+        // rows の行数を保存（動的高さ計算に使う）
+        rowsCountAllVertical = allKeysVertical.size
+        rowsCountLeftOnly = leftOnly.size
+        rowsCountRightOnly = rightOnly.size
 
         when (mode) {
             KeyRowsMode.BOTH -> {
@@ -554,7 +639,8 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
 
             val dv = drawingViewFor(dual, side)
             if (!dv.hasInk()) {
-                submitCandidates(dual, side, emptyList())
+                // 1リストなので、activeSide のときだけクリア（非activeなら触らない）
+                if (side == activeSide) submitCandidates(emptyList())
                 return@launch
             }
 
@@ -575,7 +661,10 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             Timber.d("scheduleInferReplaceAndShowCandidates candidates: $candidates")
             Timber.d("scheduleInferReplaceAndShowCandidates filtered: $filtered")
 
-            submitCandidates(dual, side, filtered)
+            // 1リストなので、activeSide の結果だけ表示
+            if (side == activeSide) {
+                submitCandidates(filtered)
+            }
 
             if (side != activeSide) return@launch
 
@@ -588,16 +677,12 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         if (side == DualDrawingComposerView.Side.A) inferJobA = newJob else inferJobB = newJob
     }
 
-    private fun submitCandidates(
-        dual: DualDrawingComposerView,
-        side: DualDrawingComposerView.Side,
-        list: List<CtcCandidate>
-    ) {
-        val rv =
-            if (side == DualDrawingComposerView.Side.A) dual.candidateListA else dual.candidateListB
-        val ad = if (side == DualDrawingComposerView.Side.A) adapterA else adapterB
+    private fun submitCandidates(list: List<CtcCandidate>) {
+        val rv = lastDualRef?.candidateList
+        val ad = adapter
+        if (rv == null || ad == null) return
 
-        ad?.submitList(list) {
+        ad.submitList(list) {
             rv.post { rv.scrollToPosition(0) }
         }
     }
