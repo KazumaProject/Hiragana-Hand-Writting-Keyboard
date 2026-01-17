@@ -90,33 +90,18 @@
                 android:paddingBottom="6dp"
                 android:visibility="gone" />
 
-            <!-- Preedit時のみ：左右カーソル -->
-            <LinearLayout
-                android:id="@+id/navRow"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal">
-
-                <Button
-                    android:id="@+id/btnLeft"
-                    android:layout_width="0dp"
-                    android:layout_height="44dp"
-                    android:layout_weight="1"
-                    android:text="◀" />
-
-                <Button
-                    android:id="@+id/btnRight"
-                    android:layout_width="0dp"
-                    android:layout_height="44dp"
-                    android:layout_weight="1"
-                    android:text="▶" />
-            </LinearLayout>
-
             <!-- ここにキーボードViewを差し替えて入れる -->
             <FrameLayout
                 android:id="@+id/keyboardContainer"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content" />
+
+            <!-- ナビゲーション：左右2ボタンを内包するカスタムView（タップ/フリック/長押し対応） -->
+            <com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.widgets.CursorNavView
+                android:id="@+id/cursorNavView"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"/>
         </LinearLayout>
 
         <!-- リサイズ用ハンドル（8点） -->
