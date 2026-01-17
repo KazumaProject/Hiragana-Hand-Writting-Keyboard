@@ -1,22 +1,44 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/handwriteRoot"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:orientation="vertical"
     android:padding="8dp">
 
-    <!-- 手書き入力エリア（上下2面） -->
+    <!-- 手書き入力エリア（中央） -->
     <com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui.DualDrawingComposerView
         android:id="@+id/dualDrawing"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content" />
-
-    <!-- 共通キー行（Space/Enter/Backspace/Clear） -->
-    <com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.widgets.KeyboardKeyRowsView
-        android:id="@+id/keyRows"
-        android:layout_width="match_parent"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp" />
+        android:minHeight="220dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toStartOf="@id/keyRowsRight"
+        app:layout_constraintStart_toEndOf="@id/keyRowsLeft"
+        app:layout_constraintTop_toTopOf="parent" />
 
-</LinearLayout>
+    <!-- 左側キー：高さを dualDrawing と同一にする -->
+    <com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.widgets.KeyboardKeyRowsView
+        android:id="@+id/keyRowsLeft"
+        android:layout_width="56dp"
+        android:layout_height="0dp"
+        android:gravity="top"
+        android:paddingTop="0dp"
+        android:paddingBottom="0dp"
+        app:layout_constraintBottom_toBottomOf="@id/dualDrawing"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="@id/dualDrawing" />
+
+    <!-- 右側キー：高さを dualDrawing と同一にする -->
+    <com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.widgets.KeyboardKeyRowsView
+        android:id="@+id/keyRowsRight"
+        android:layout_width="56dp"
+        android:layout_height="0dp"
+        android:gravity="top"
+        android:paddingTop="0dp"
+        android:paddingBottom="0dp"
+        app:layout_constraintBottom_toBottomOf="@id/dualDrawing"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="@id/dualDrawing" />
+
+</androidx.constraintlayout.widget.ConstraintLayout>

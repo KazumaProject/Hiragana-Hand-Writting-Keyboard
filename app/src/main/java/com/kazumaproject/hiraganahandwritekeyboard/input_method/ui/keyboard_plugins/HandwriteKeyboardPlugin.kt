@@ -37,12 +37,20 @@ import kotlin.math.max
  *   かつ 直前側 DrawingView をクリア
  * - ConcurrentModificationException 対策として export は Main スレッドで行う
  *
- * ★拡張:
+ * 拡張:
  * - 各 DrawingView の下に TopK 候補（percent>0）を横リスト表示
  * - ユーザーがタップした候補を「採用」し、IME末尾置換に反映（active side のみ）
  *
- * ★修正案A:
- * - 候補を submitList した直後に必ず先頭を表示する（初回だけ先頭が隠れる問題を潰す）
+ * 修正案A:
+ * - 候補を submitList した直後に必ず先頭を表示
+ *
+ * UI変更:
+ * - keyRows を dualDrawing の左右に配置
+ *   - デフォルト: 左=Clear, 右=Backspace/Space/Enter（右は縦積み）
+ *
+ * 表示変更:
+ * - キーの text をラベルからアイコン文字へ
+ *   - Clear: ⟲ / Backspace: ⌫ / Space: ␣ / Enter: ⏎
  */
 class HandwriteKeyboardPlugin : KeyboardPlugin {
 
@@ -92,20 +100,10 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
 
         // --- setup candidate lists (horizontal) ---
         adapterA = CtcCandidateAdapter { c ->
-            onCandidateTapped(
-                dual,
-                DualDrawingComposerView.Side.A,
-                c,
-                controller
-            )
+            onCandidateTapped(dual, DualDrawingComposerView.Side.A, c, controller)
         }
         adapterB = CtcCandidateAdapter { c ->
-            onCandidateTapped(
-                dual,
-                DualDrawingComposerView.Side.B,
-                c,
-                controller
-            )
+            onCandidateTapped(dual, DualDrawingComposerView.Side.B, c, controller)
         }
 
         dual.candidateListA.layoutManager =
@@ -120,44 +118,72 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         submitCandidates(dual, DualDrawingComposerView.Side.A, emptyList())
         submitCandidates(dual, DualDrawingComposerView.Side.B, emptyList())
 
-        // --- shared action keys (Space/Enter/Backspace/Clear) ---
-        val actionRows: KeyboardKeyRowsView = v.findViewById(R.id.keyRows)
+        // --- shared action keys (Left/Right) ---
+        val leftRows: KeyboardKeyRowsView = v.findViewById(R.id.keyRowsLeft)
+        val rightRows: KeyboardKeyRowsView = v.findViewById(R.id.keyRowsRight)
 
-        actionRows.setRows(
+        // 左: Clear（縦積み。1キー=1行）
+        leftRows.setRows(
             rows = listOf(
                 listOf(
                     KeyboardKeySpec(
-                        keyId = "space",
-                        text = "Space",
-                        onClick = { it.dispatch(KeyboardAction.InputText(" ")) }
-                    ),
-                    KeyboardKeySpec(
-                        keyId = "enter",
-                        text = "Enter",
-                        onClick = { it.dispatch(KeyboardAction.Enter) }
-                    ),
-                    KeyboardKeySpec(
-                        keyId = "backspace",
-                        text = "⌫",
-                        onClick = { it.dispatch(KeyboardAction.Backspace) }
-                    ),
-                    KeyboardKeySpec(
                         keyId = "clear",
-                        text = "Clear",
+                        text = "⟲",
                         onClick = {
                             dual.clearBoth()
                             cancelInferJobs()
 
-                            // 候補も消す
                             submitCandidates(dual, DualDrawingComposerView.Side.A, emptyList())
                             submitCandidates(dual, DualDrawingComposerView.Side.B, emptyList())
 
-                            // 「置換中」だった末尾スロットも破棄した扱いにする（以後 Backspace で消さない）
                             activePreviewLen = 0
 
                             // generation を進めて古い推論を無効化
                             genA++
                             genB++
+                        }
+                    )
+                )
+            ),
+            controller = controller
+        )
+
+        // 右: Backspace / Space / Enter（縦積み。1キー=1行）
+        rightRows.setRows(
+            rows = listOf(
+                listOf(
+                    KeyboardKeySpec(
+                        keyId = "backspace",
+                        text = "⌫",
+                        onClick = {
+                            it.dispatch(KeyboardAction.Backspace)
+
+                            // 末尾置換スロットの追従
+                            if (controller.isPreedit && activePreviewLen > 0) {
+                                activePreviewLen = (activePreviewLen - 1).coerceAtLeast(0)
+                            }
+                        }
+                    )
+                ),
+                listOf(
+                    KeyboardKeySpec(
+                        keyId = "space",
+                        text = "␣",
+                        onClick = {
+                            it.dispatch(KeyboardAction.InputText(" "))
+                            // space まで巻き戻して消さないため確定扱い
+                            activePreviewLen = 0
+                        }
+                    )
+                ),
+                listOf(
+                    KeyboardKeySpec(
+                        keyId = "enter",
+                        text = "⏎",
+                        onClick = {
+                            it.dispatch(KeyboardAction.Enter)
+                            // Enter は確定寄り
+                            activePreviewLen = 0
                         }
                     )
                 )
@@ -175,7 +201,7 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
                 val prev = activeSide
                 drawingViewFor(dual, prev).clearCanvas()
 
-                // 直前側の候補もクリア（UI的に自然）
+                // 直前側の候補もクリア
                 submitCandidates(dual, prev, emptyList())
 
                 // 直前側の推論を無効化
@@ -187,7 +213,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         }
 
         dual.onStrokeCommitted = { side ->
-            // stroke確定 -> 推論して IME の末尾を置換更新 + 候補表示
             scheduleInferReplaceAndShowCandidates(dual, side, controller)
         }
 
@@ -210,12 +235,11 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         if (candidate.text.isBlank()) return
         if (candidate.percent <= 0.0) return
 
-        // タップされたら「その候補を採用」:
-        // 1) このsideの古い推論結果で上書きされないよう generation を進める
+        // このsideの古い推論結果で上書きされないよう generation を進める
         bumpGeneration(side)
         cancelInferJobFor(side)
 
-        // 2) active side のときだけ IME 末尾置換を更新
+        // active side のときだけ末尾置換を更新
         if (side != activeSide) return
         applyReplaceTailToIme(controller, candidate.text)
     }
@@ -257,19 +281,17 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
 
             if (!isLatest(side, token)) return@launch
 
-            // percent>0 のみ表示（要件）
+            // percent>0 のみ表示
             val filtered = candidates.filter { it.text.isNotBlank() && it.percent > 0.0 }
 
             Timber.d("scheduleInferReplaceAndShowCandidates candidates: $candidates")
             Timber.d("scheduleInferReplaceAndShowCandidates filtered: $filtered")
 
-            // UIへ反映（A案：反映後に必ず先頭へ）
             submitCandidates(dual, side, filtered)
 
             // 末尾置換は active side のみ
             if (side != activeSide) return@launch
 
-            // 自動採用は Top1（filteredが空なら何もしない）
             val top1 = filtered.firstOrNull()?.text?.trim().orEmpty()
             if (top1.isBlank()) return@launch
 
@@ -280,7 +302,7 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
     }
 
     /**
-     * ★修正案A: submitList の commitCallback + post で必ず先頭を表示
+     * 修正案A: submitList の commitCallback + post で必ず先頭を表示
      */
     private fun submitCandidates(
         dual: DualDrawingComposerView,
@@ -291,7 +313,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             if (side == DualDrawingComposerView.Side.A) dual.candidateListA else dual.candidateListB
         val ad = if (side == DualDrawingComposerView.Side.A) adapterA else adapterB
 
-        // submitList は差分適用が非同期なので、commit後に先頭へ戻す
         ad?.submitList(list) {
             rv.post { rv.scrollToPosition(0) }
         }
