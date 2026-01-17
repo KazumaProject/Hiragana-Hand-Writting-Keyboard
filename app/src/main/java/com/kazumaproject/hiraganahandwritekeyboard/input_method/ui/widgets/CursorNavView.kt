@@ -20,11 +20,6 @@ class CursorNavView @JvmOverloads constructor(
 
     enum class Side { LEFT, RIGHT }
 
-    /**
-     * - TAP: タップ
-     * - FLICK_UP / FLICK_DOWN: フリック上下
-     * - LONG_*: 長押し中のリピートイベント（View側で繰り返し発火）
-     */
     enum class Action {
         TAP,
         FLICK_UP,
@@ -47,29 +42,68 @@ class CursorNavView @JvmOverloads constructor(
     private val leftBtn: Button
     private val rightBtn: Button
 
+    private var buttonHeightPx: Int = dpToPx(44f)
+
     init {
         orientation = HORIZONTAL
 
-        val h = dpToPx(44f)
-        val lp = LayoutParams(0, h).apply { weight = 1f }
-
         leftBtn = Button(context).apply {
             text = "◀"
-            minHeight = h
-            layoutParams = lp
+            // ★左右で同じ見た目にする
+            isAllCaps = false
+            setPadding(0, 0, 0, 0)
+            minWidth = 0
+            minimumWidth = 0
         }
 
         rightBtn = Button(context).apply {
             text = "▶"
-            minHeight = h
-            layoutParams = lp
+            // ★左右で同じ見た目にする
+            isAllCaps = false
+            setPadding(0, 0, 0, 0)
+            minWidth = 0
+            minimumWidth = 0
         }
+
+        // ★重要：LayoutParams を使い回さない（左右で別インスタンス）
+        applyButtonHeightInternal(buttonHeightPx)
 
         addView(leftBtn)
         addView(rightBtn)
 
         leftBtn.setOnTouchListener(NavTouchHandler(Side.LEFT))
         rightBtn.setOnTouchListener(NavTouchHandler(Side.RIGHT))
+    }
+
+    /**
+     * 外からキー高さに合わせたい時に呼ぶ（例：keyRows の minHeightDp）
+     */
+    fun setButtonHeightDp(dp: Float) {
+        val px = dpToPx(dp)
+        applyButtonHeightInternal(px)
+    }
+
+    /**
+     * アイコン（文字）の見た目を揃えるため、明示的にテキストサイズを固定できるようにする
+     */
+    fun setIconTextSizeSp(sp: Float) {
+        leftBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
+        rightBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
+    }
+
+    private fun applyButtonHeightInternal(heightPx: Int) {
+        buttonHeightPx = heightPx
+
+        val lpLeft = LayoutParams(0, buttonHeightPx).apply { weight = 1f }
+        val lpRight = LayoutParams(0, buttonHeightPx).apply { weight = 1f }
+
+        leftBtn.layoutParams = lpLeft
+        rightBtn.layoutParams = lpRight
+
+        leftBtn.minHeight = buttonHeightPx
+        rightBtn.minHeight = buttonHeightPx
+
+        requestLayout()
     }
 
     private inner class NavTouchHandler(
@@ -80,7 +114,7 @@ class CursorNavView @JvmOverloads constructor(
 
         private val longPressTimeout = ViewConfiguration.getLongPressTimeout().toLong()
         private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
-        private val flickThreshold = max(touchSlop, dpToPx(18f)) // 上下フリック判定の閾値
+        private val flickThreshold = max(touchSlop, dpToPx(18f))
 
         private var downX = 0f
         private var downY = 0f
@@ -89,7 +123,6 @@ class CursorNavView @JvmOverloads constructor(
         private var decidedAction: Action? = null
         private var longPressed = false
 
-        // 長押しリピート
         private var repeating = false
         private var repeatingAction: Action = Action.LONG_TAP
         private val repeatIntervalMs = 60L
@@ -98,7 +131,6 @@ class CursorNavView @JvmOverloads constructor(
             if (activePointerId == -1) return@Runnable
             longPressed = true
 
-            // 長押し開始時点の方向に応じて種別決定（未決定ならタップ長押し）
             val lpAction = when (decidedAction) {
                 Action.FLICK_UP -> Action.LONG_FLICK_UP
                 Action.FLICK_DOWN -> Action.LONG_FLICK_DOWN
@@ -139,15 +171,12 @@ class CursorNavView @JvmOverloads constructor(
                     val dy = event.y - downY
 
                     if (!longPressed) {
-                        // まだ長押しに入っていない段階：縦方向が明確なら決定
                         if (abs(dy) >= flickThreshold && abs(dy) > abs(dx)) {
                             decidedAction = if (dy < 0) Action.FLICK_UP else Action.FLICK_DOWN
                         } else if (abs(dx) >= touchSlop || abs(dy) >= touchSlop) {
-                            // 動いたが縦フリック条件を満たさない → タップ扱いを維持
                             if (decidedAction == null) decidedAction = Action.TAP
                         }
                     } else {
-                        // 長押し中：上下方向の長押し種別を動的に切替
                         if (abs(dy) >= flickThreshold && abs(dy) > abs(dx)) {
                             repeatingAction =
                                 if (dy < 0) Action.LONG_FLICK_UP else Action.LONG_FLICK_DOWN
@@ -167,7 +196,6 @@ class CursorNavView @JvmOverloads constructor(
                     if (repeating) {
                         stopRepeating()
                     } else if (!longPressed) {
-                        // 単発イベント
                         val act = decidedAction ?: Action.TAP
                         val fire = when (act) {
                             Action.FLICK_UP -> Action.FLICK_UP
@@ -189,7 +217,6 @@ class CursorNavView @JvmOverloads constructor(
         private fun startRepeating(first: Action) {
             repeating = true
             repeatingAction = first
-            // 即時1回 → 以降リピート
             listener?.onAction(side, repeatingAction)
             main.postDelayed(repeatRunnable, repeatIntervalMs)
         }

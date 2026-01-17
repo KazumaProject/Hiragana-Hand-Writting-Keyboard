@@ -2,20 +2,23 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/root"
     android:layout_width="match_parent"
-    android:layout_height="wrap_content"
-    android:orientation="horizontal">
+    android:layout_height="match_parent"
+    android:orientation="horizontal"
+    android:padding="0dp">
 
     <!-- Side A (left column) -->
     <LinearLayout
         android:layout_width="0dp"
-        android:layout_height="wrap_content"
+        android:layout_height="match_parent"
         android:layout_weight="1"
-        android:orientation="vertical">
+        android:orientation="vertical"
+        android:padding="0dp">
 
         <com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui.DrawingView
             android:id="@+id/drawingViewA"
             android:layout_width="match_parent"
-            android:layout_height="140dp"
+            android:layout_height="0dp"
+            android:layout_weight="1"
             android:background="@android:color/white" />
 
         <androidx.recyclerview.widget.RecyclerView
@@ -29,14 +32,16 @@
     <!-- Side B (right column) -->
     <LinearLayout
         android:layout_width="0dp"
-        android:layout_height="wrap_content"
+        android:layout_height="match_parent"
         android:layout_weight="1"
-        android:orientation="vertical">
+        android:orientation="vertical"
+        android:padding="0dp">
 
         <com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui.DrawingView
             android:id="@+id/drawingViewB"
             android:layout_width="match_parent"
-            android:layout_height="140dp"
+            android:layout_height="0dp"
+            android:layout_weight="1"
             android:background="@android:color/white" />
 
         <androidx.recyclerview.widget.RecyclerView

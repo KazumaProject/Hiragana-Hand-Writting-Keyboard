@@ -3,6 +3,7 @@ package com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.keyboard_plu
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.util.TypedValue
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -70,25 +71,23 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
     private var lastDualRef: DualDrawingComposerView? = null
     private var lastControllerRef: ImeController? = null
 
+    // ---- computed key height ----
+    private var computedKeyMinHeightDp: Int = 40 // 初期値（描画View計測後に上書き）
+
     // ---------------- key rows mode ----------------
 
     enum class KeyRowsMode {
         LEFT_ONLY,
         RIGHT_ONLY,
         BOTH,
-
-        // ★追加：dualDrawing の下だけに出す
         BOTTOM_ONLY,
-
-        // ★追加：左右 + 下（全部出す）
         BOTH_WITH_BOTTOM,
-
         NONE
     }
 
     object HandwriteUiConfig {
         @Volatile
-        var keyRowsMode: KeyRowsMode = KeyRowsMode.BOTTOM_ONLY
+        var keyRowsMode: KeyRowsMode = KeyRowsMode.RIGHT_ONLY
     }
 
     fun setKeyRowsMode(mode: KeyRowsMode) {
@@ -113,7 +112,8 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
                 rightRows = right,
                 bottomRows = bottom,
                 dual = dual,
-                controller = controller
+                controller = controller,
+                keyMinHeightDp = computedKeyMinHeightDp
             )
         }
     }
@@ -171,8 +171,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         lastDualRef = dual
         lastControllerRef = controller
 
-        dual.setStrokeWidthPx(24f)
-
         if (recognizer == null) {
             recognizer = HiraCtcRecognizer(
                 context = parent.context.applicationContext,
@@ -210,16 +208,49 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
 
         val mode = HandwriteUiConfig.keyRowsMode
 
+        // まず初期表示
         applyKeyRowsMode(leftRows, rightRows, bottomRows, mode)
-
         configureKeyRows(
             mode = mode,
             leftRows = leftRows,
             rightRows = rightRows,
             bottomRows = bottomRows,
             dual = dual,
-            controller = controller
+            controller = controller,
+            keyMinHeightDp = computedKeyMinHeightDp
         )
+
+        // ---- ここが本題：drawingView の実高さに合わせて keyRows の高さとキー高さを再計算 ----
+        // drawingViewA/B が 200dp 固定でも、将来変えても追随できるようにする
+        v.post {
+            val drawingHeightPx = dual.viewA.height.takeIf { it > 0 }
+                ?: dual.viewA.layoutParams.height.takeIf { it > 0 }
+                ?: dpToPx(v, 200f)
+
+            // keyRowsLeft/right のコンテナ高さを drawing と同じにする（モードによって見えている方だけでもOK）
+            leftRows.layoutParams = leftRows.layoutParams.apply { height = drawingHeightPx }
+            rightRows.layoutParams = rightRows.layoutParams.apply { height = drawingHeightPx }
+
+            // 縦並び（5キー）でピッタリ埋めるために minHeightDp を算出
+            val drawingHeightDp = (drawingHeightPx / v.resources.displayMetrics.density)
+            val perKeyDp = (drawingHeightDp / 5f).toInt().coerceAtLeast(32) // 下限は好みで調整可
+            computedKeyMinHeightDp = perKeyDp
+
+            // 再構築（キーの minHeightDp が変わる）
+            applyKeyRowsMode(leftRows, rightRows, bottomRows, mode)
+            configureKeyRows(
+                mode = mode,
+                leftRows = leftRows,
+                rightRows = rightRows,
+                bottomRows = bottomRows,
+                dual = dual,
+                controller = controller,
+                keyMinHeightDp = computedKeyMinHeightDp
+            )
+
+            leftRows.requestLayout()
+            rightRows.requestLayout()
+        }
 
         dual.onStrokeStarted = { side ->
             if (side != activeSide) {
@@ -262,11 +293,13 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         rightRows: KeyboardKeyRowsView,
         bottomRows: KeyboardKeyRowsView?,
         dual: DualDrawingComposerView,
-        controller: ImeController
+        controller: ImeController,
+        keyMinHeightDp: Int
     ) {
         fun clearKey() = KeyboardKeySpec.ButtonKey(
             keyId = "clear",
             text = "⟲",
+            minHeightDp = keyMinHeightDp,
             onClick = {
                 dual.clearBoth()
                 cancelInferJobs()
@@ -281,16 +314,18 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             repeatOnLongPress = false
         )
 
-        // CursorNavView：上下フリックも dispatch する
         fun cursorNavKey() = KeyboardKeySpec.CustomViewKey(
             keyId = "cursor_nav",
-            minHeightDp = 44,
+            minHeightDp = keyMinHeightDp,
             createView = { ctx, _parent, c ->
                 CursorNavView(ctx).apply {
                     layoutParams = ViewGroup.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT
                     )
+                    // ★キー高さに合わせる
+                    setButtonHeightDp(keyMinHeightDp.toFloat())
+                    setIconTextSizeSp(18f)
 
                     setListener(object : CursorNavView.Listener {
                         override fun onAction(
@@ -326,11 +361,22 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         fun backspaceKey() = KeyboardKeySpec.ButtonKey(
             keyId = "backspace",
             text = "⌫",
+            minHeightDp = keyMinHeightDp,
             onClick = {
                 it.dispatch(KeyboardAction.Backspace)
                 if (controller.isPreedit && activePreviewLen > 0) {
                     activePreviewLen = (activePreviewLen - 1).coerceAtLeast(0)
                 }
+
+                dual.clearBoth()
+                cancelInferJobs()
+
+                submitCandidates(dual, DualDrawingComposerView.Side.A, emptyList())
+                submitCandidates(dual, DualDrawingComposerView.Side.B, emptyList())
+
+                activePreviewLen = 0
+                genA++
+                genB++
             },
             repeatOnLongPress = true,
             repeatIntervalMs = 60L,
@@ -341,6 +387,7 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         fun spaceKey() = KeyboardKeySpec.ButtonKey(
             keyId = "space",
             text = "␣",
+            minHeightDp = keyMinHeightDp,
             onClick = {
                 it.dispatch(KeyboardAction.InputText(" "))
                 activePreviewLen = 0
@@ -351,9 +398,20 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         fun enterKey() = KeyboardKeySpec.ButtonKey(
             keyId = "enter",
             text = "⏎",
+            minHeightDp = keyMinHeightDp,
             onClick = {
                 it.dispatch(KeyboardAction.Enter)
                 activePreviewLen = 0
+
+                dual.clearBoth()
+                cancelInferJobs()
+
+                submitCandidates(dual, DualDrawingComposerView.Side.A, emptyList())
+                submitCandidates(dual, DualDrawingComposerView.Side.B, emptyList())
+
+                activePreviewLen = 0
+                genA++
+                genB++
             },
             repeatOnLongPress = false
         )
@@ -366,7 +424,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             listOf(enterKey())
         )
 
-        // ★下側に出す用：横一列（必要なら2行に増やしてOK）
         val allKeysHorizontal = listOf(
             listOf(
                 clearKey(),
@@ -606,6 +663,14 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         } catch (_: Throwable) {
             emptyList()
         }
+    }
+
+    private fun dpToPx(v: View, dp: Float): Int {
+        return TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_DIP,
+            dp,
+            v.resources.displayMetrics
+        ).toInt()
     }
 
     companion object {

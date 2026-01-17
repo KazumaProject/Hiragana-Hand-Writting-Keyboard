@@ -3,25 +3,24 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/handwriteRoot"
     android:layout_width="match_parent"
-    android:layout_height="wrap_content"
+    android:layout_height="match_parent"
     android:padding="8dp">
 
-    <!-- 手書き入力エリア（中央） -->
     <com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui.DualDrawingComposerView
         android:id="@+id/dualDrawing"
         android:layout_width="0dp"
-        android:layout_height="wrap_content"
+        android:layout_height="0dp"
         android:minHeight="220dp"
         app:layout_constraintBottom_toTopOf="@id/keyRowsBottom"
         app:layout_constraintEnd_toStartOf="@id/keyRowsRight"
         app:layout_constraintStart_toEndOf="@id/keyRowsLeft"
         app:layout_constraintTop_toTopOf="parent" />
 
-    <!-- 左側キー：高さを dualDrawing と同一にする -->
     <com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.widgets.KeyboardKeyRowsView
         android:id="@+id/keyRowsLeft"
         android:layout_width="64dp"
         android:layout_height="0dp"
+        android:layout_marginBottom="@dimen/handwrite_candidate_bar_height"
         android:gravity="top"
         android:paddingTop="0dp"
         android:paddingBottom="0dp"
@@ -29,11 +28,11 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="@id/dualDrawing" />
 
-    <!-- 右側キー：高さを dualDrawing と同一にする -->
     <com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.widgets.KeyboardKeyRowsView
         android:id="@+id/keyRowsRight"
         android:layout_width="64dp"
         android:layout_height="0dp"
+        android:layout_marginBottom="@dimen/handwrite_candidate_bar_height"
         android:gravity="top"
         android:paddingTop="0dp"
         android:paddingBottom="0dp"
@@ -41,7 +40,6 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintTop_toTopOf="@id/dualDrawing" />
 
-    <!-- 下側キー：dualDrawing の下に出す -->
     <com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.widgets.KeyboardKeyRowsView
         android:id="@+id/keyRowsBottom"
         android:layout_width="0dp"
