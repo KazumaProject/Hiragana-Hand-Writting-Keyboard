@@ -8,7 +8,10 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import androidx.core.graphics.createBitmap
+import androidx.recyclerview.widget.LinearLayoutManager
 import com.kazumaproject.hiraganahandwritekeyboard.R
+import com.kazumaproject.hiraganahandwritekeyboard.hand_writting.data.CtcCandidate
+import com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui.CtcCandidateAdapter
 import com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui.DrawingView
 import com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui.DualDrawingComposerView
 import com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui.HiraCtcRecognizer
@@ -31,6 +34,13 @@ import kotlin.math.max
  * - 反対側に触れた瞬間（onStrokeStarted）に、それまでの末尾置換を「確定」（= 置換対象から外す）
  *   かつ 直前側 DrawingView をクリア
  * - ConcurrentModificationException 対策として export は Main スレッドで行う
+ *
+ * ★拡張:
+ * - 各 DrawingView の下に TopK 候補（percent>0）を横リスト表示
+ * - ユーザーがタップした候補を「採用」し、IME末尾置換に反映（active side のみ）
+ *
+ * ★修正案A:
+ * - 候補を submitList した直後に必ず先頭を表示する（初回だけ先頭が隠れる問題を潰す）
  */
 class HandwriteKeyboardPlugin : KeyboardPlugin {
 
@@ -58,6 +68,10 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
     private var genA: Long = 0L
     private var genB: Long = 0L
 
+    // ---- candidate adapters ----
+    private var adapterA: CtcCandidateAdapter? = null
+    private var adapterB: CtcCandidateAdapter? = null
+
     override fun createView(parent: ViewGroup, controller: ImeController): View {
         val v =
             LayoutInflater.from(parent.context).inflate(R.layout.keyboard_handwrite, parent, false)
@@ -80,6 +94,36 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             )
         }
 
+        // --- setup candidate lists (horizontal) ---
+        adapterA = CtcCandidateAdapter { c ->
+            onCandidateTapped(
+                dual,
+                DualDrawingComposerView.Side.A,
+                c,
+                controller
+            )
+        }
+        adapterB = CtcCandidateAdapter { c ->
+            onCandidateTapped(
+                dual,
+                DualDrawingComposerView.Side.B,
+                c,
+                controller
+            )
+        }
+
+        dual.candidateListA.layoutManager =
+            LinearLayoutManager(parent.context, LinearLayoutManager.HORIZONTAL, false)
+        dual.candidateListB.layoutManager =
+            LinearLayoutManager(parent.context, LinearLayoutManager.HORIZONTAL, false)
+
+        dual.candidateListA.adapter = adapterA
+        dual.candidateListB.adapter = adapterB
+
+        // 初期は空（先頭スクロールも含めて統一）
+        submitCandidates(dual, DualDrawingComposerView.Side.A, emptyList())
+        submitCandidates(dual, DualDrawingComposerView.Side.B, emptyList())
+
         // --- buttons: forward to IME controller ---
         btnSpace.setOnClickListener { controller.dispatch(KeyboardAction.InputText(" ")) }
         btnEnter.setOnClickListener { controller.dispatch(KeyboardAction.Enter) }
@@ -88,42 +132,46 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         btnClear.setOnClickListener {
             dual.clearBoth()
             cancelInferJobs()
+
+            // 候補も消す
+            submitCandidates(dual, DualDrawingComposerView.Side.A, emptyList())
+            submitCandidates(dual, DualDrawingComposerView.Side.B, emptyList())
+
             // 「置換中」だった末尾スロットも破棄した扱いにする（以後 Backspace で消さない）
             activePreviewLen = 0
+
             // generation を進めて古い推論を無効化
             genA++
             genB++
         }
 
-        // btnA の意味はあなたが決めるものなので削除しない（ここでは元のまま「何もしない」ではなく例として「あ」）
+        // btnA は削除しない（例として「あ」）
         btnA.setOnClickListener { controller.dispatch(KeyboardAction.InputText("あ")) }
 
         // --- DualDrawing callbacks ---
         dual.onStrokeStarted = { side ->
             if (side != activeSide) {
-                // 反対側に触れた瞬間に「確定」:
-                // - これまでの末尾置換を終了（= 置換対象から外す）
+                // 反対側に触れた瞬間に「確定」
                 activePreviewLen = 0
 
-                // - 直前側をクリア（あなたの要件）
+                // 直前側をクリア（要件）
                 val prev = activeSide
                 drawingViewFor(dual, prev).clearCanvas()
 
-                // - 直前側の推論を無効化（古い結果で上書きしない）
+                // 直前側の候補もクリア（UI的に自然）
+                submitCandidates(dual, prev, emptyList())
+
+                // 直前側の推論を無効化
                 bumpGeneration(prev)
                 cancelInferJobFor(prev)
 
                 activeSide = side
-                // 新しい side での置換スロットは未開始
-                // activePreviewLen はすでに 0
-            } else {
-                // 同じ side を続けて触っただけなら何もしない
             }
         }
 
         dual.onStrokeCommitted = { side ->
-            // stroke確定 -> 推論して IME の末尾を置換更新
-            scheduleInferAndReplaceTail(dual, side, controller)
+            // stroke確定 -> 推論して IME の末尾を置換更新 + 候補表示
+            scheduleInferReplaceAndShowCandidates(dual, side, controller)
         }
 
         return v
@@ -134,14 +182,34 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         pluginJob.cancel()
     }
 
-    // ---------------- infer + replace tail ----------------
+    // ---------------- candidate tap ----------------
 
-    private fun scheduleInferAndReplaceTail(
+    private fun onCandidateTapped(
+        dual: DualDrawingComposerView,
+        side: DualDrawingComposerView.Side,
+        candidate: CtcCandidate,
+        controller: ImeController
+    ) {
+        if (candidate.text.isBlank()) return
+        if (candidate.percent <= 0.0) return
+
+        // タップされたら「その候補を採用」:
+        // 1) このsideの古い推論結果で上書きされないよう generation を進める
+        bumpGeneration(side)
+        cancelInferJobFor(side)
+
+        // 2) active side のときだけ IME 末尾置換を更新
+        if (side != activeSide) return
+        applyReplaceTailToIme(controller, candidate.text)
+    }
+
+    // ---------------- infer + replace tail + show candidates ----------------
+
+    private fun scheduleInferReplaceAndShowCandidates(
         dual: DualDrawingComposerView,
         side: DualDrawingComposerView.Side,
         controller: ImeController
     ) {
-        // generation token を採番（この時点より古い結果は捨てる）
         val token = bumpGeneration(side)
 
         val jobRef = if (side == DualDrawingComposerView.Side.A) inferJobA else inferJobB
@@ -150,60 +218,79 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         val newJob = scope.launch {
             delay(HandwriteCommitConfig.debounceMs)
 
-            // 触っている side が変わっていたら（=確定済み）この結果は捨てる
             if (!isLatest(side, token)) return@launch
 
             val dv = drawingViewFor(dual, side)
-            if (!dv.hasInk()) return@launch
+            if (!dv.hasInk()) {
+                submitCandidates(dual, side, emptyList())
+                return@launch
+            }
 
-            // export は UI状態を読むので Main スレッドで行う（ConcurrentModificationException 対策）
             val strokeWidthPx = DEFAULT_STROKE_WIDTH_PX.toFloat().coerceAtLeast(1f)
 
+            // export は Main
             val whiteBmp = withContext(Dispatchers.Main.immediate) {
                 exportForInferOnMain(dv, strokeWidthPx)
             }
 
-            // 推論は重いのでバックグラウンド
-            val detected = withContext(Dispatchers.Default) {
-                runSingleInferTop1(whiteBmp)
-            }.trim()
+            // 推論は Default
+            val candidates = withContext(Dispatchers.Default) {
+                runInferTopK(whiteBmp, topK = HandwriteCommitConfig.topK)
+            }
 
             if (!isLatest(side, token)) return@launch
-            if (detected.isBlank()) return@launch
 
-            // 重要: 末尾置換は「アクティブ side のみ」に適用
+            // percent>0 のみ表示（要件）
+            val filtered = candidates.filter { it.text.isNotBlank() && it.percent > 0.0 }
+
+            // UIへ反映（A案：反映後に必ず先頭へ）
+            submitCandidates(dual, side, filtered)
+
+            // 末尾置換は active side のみ
             if (side != activeSide) return@launch
 
-            applyReplaceTailToIme(controller, detected)
+            // 自動採用は Top1（filteredが空なら何もしない）
+            val top1 = filtered.firstOrNull()?.text?.trim().orEmpty()
+            if (top1.isBlank()) return@launch
+
+            applyReplaceTailToIme(controller, top1)
         }
 
-        if (side == DualDrawingComposerView.Side.A) {
-            inferJobA = newJob
-        } else {
-            inferJobB = newJob
+        if (side == DualDrawingComposerView.Side.A) inferJobA = newJob else inferJobB = newJob
+    }
+
+    /**
+     * ★修正案A: submitList の commitCallback + post で必ず先頭を表示
+     */
+    private fun submitCandidates(
+        dual: DualDrawingComposerView,
+        side: DualDrawingComposerView.Side,
+        list: List<CtcCandidate>
+    ) {
+        val rv =
+            if (side == DualDrawingComposerView.Side.A) dual.candidateListA else dual.candidateListB
+        val ad = if (side == DualDrawingComposerView.Side.A) adapterA else adapterB
+
+        // submitList は差分適用が非同期なので、commit後に先頭へ戻す
+        ad?.submitList(list) {
+            rv.post { rv.scrollToPosition(0) }
         }
     }
 
     /**
      * IME（Preedit）の末尾を「置換」する。
-     * - 直前に挿入した暫定文字数 activePreviewLen を Backspace で消してから InputText
-     * - これを onStrokeCommitted 毎に繰り返すことで「置換更新」になる
      */
     private fun applyReplaceTailToIme(controller: ImeController, newText: String) {
-        // Direct でこれをやるとエディタ本文を削る危険があるため、Preedit の時だけ置換モードを使う
         if (!controller.isPreedit) {
             controller.dispatch(KeyboardAction.InputText(newText))
             return
         }
 
-        // 末尾の暫定スロットを削除
         repeat(activePreviewLen) {
             controller.dispatch(KeyboardAction.Backspace)
         }
 
-        // 新しい暫定文字を挿入
         controller.dispatch(KeyboardAction.InputText(newText))
-
         activePreviewLen = newText.length
     }
 
@@ -226,13 +313,11 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
     // ---------------- config ----------------
 
     object HandwriteCommitConfig {
-        /**
-         * onStrokeCommitted 後、推論を走らせるまでの待ち時間
-         * - 小さすぎると推論が多発、UIも重くなる
-         * - 大きすぎると反映が遅い
-         */
         @Volatile
         var debounceMs: Long = 120L
+
+        @Volatile
+        var topK: Int = 6
     }
 
     // ---------------- view/helpers ----------------
@@ -257,10 +342,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         }
     }
 
-    /**
-     * ConcurrentModificationException 対策:
-     * - DrawingView の stroke list は UI スレッドで更新されているため、export は Main で行う
-     */
     private fun exportForInferOnMain(drawingView: DrawingView, strokeWidthPx: Float): Bitmap {
         val border = max(24, (strokeWidthPx * 2.2f).toInt())
         val strokes = drawingView.exportStrokesBitmapTransparent(borderPx = border)
@@ -272,43 +353,35 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         return out
     }
 
-    private fun runSingleInferTop1(whiteBmp: Bitmap): String {
-        val r = recognizer ?: return ""
+    private fun runInferTopK(whiteBmp: Bitmap, topK: Int): List<CtcCandidate> {
+        val r = recognizer ?: return emptyList()
 
         return try {
-            // 1) 極端に小さい入力は弾く（export結果が細すぎるケース）
-            //    ※数値は保守的。必要なら調整してください。
-            if (whiteBmp.width < 16 || whiteBmp.height < 16) return ""
+            if (whiteBmp.width < 16 || whiteBmp.height < 16) return emptyList()
 
             val normalized = BitmapPreprocessor.tightCenterSquare(
                 srcWhiteBg = whiteBmp,
                 inkThresh = 245,
                 innerPadPx = 8,
                 outerMarginPx = 24,
-                // 2) 最小サイズを引き上げる（CRNNのpoolingで幅が0になるのを防ぐ）
                 minSidePx = 192
             )
 
-            // 3) ここでも最終チェック（tightCenterSquareの実装次第で保険）
-            if (normalized.width < 32 || normalized.height < 32) return ""
+            if (normalized.width < 32 || normalized.height < 32) return emptyList()
 
-            val candidates = r.inferTopK(
+            r.inferTopK(
                 bitmap = normalized,
-                topK = 1,
+                topK = topK.coerceAtLeast(1),
                 beamWidth = 25,
                 perStepTop = 25
             )
-
-            candidates.firstOrNull()?.text.orEmpty()
         } catch (_: Throwable) {
-            // TorchScriptは入力条件違反で例外を投げるので、クラッシュさせず無視する
-            ""
+            emptyList()
         }
     }
 
     companion object {
         private const val DEFAULT_STROKE_WIDTH_PX = 32
-
         private const val DEFAULT_MODEL_ASSET = "model_torchscript.pt"
         private const val DEFAULT_VOCAB_ASSET = "vocab.json"
     }

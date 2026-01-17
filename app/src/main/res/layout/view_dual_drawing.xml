@@ -1,13 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/dualDrawingRoot"
+    android:id="@+id/root"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="horizontal">
 
-    <!-- Left pane (A) -->
+    <!-- Side A (left column) -->
     <LinearLayout
-        android:id="@+id/paneA"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_weight="1"
@@ -16,25 +15,37 @@
         <com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui.DrawingView
             android:id="@+id/drawingViewA"
             android:layout_width="match_parent"
-            android:layout_height="180dp"
-            android:layout_marginTop="6dp"
+            android:layout_height="140dp"
             android:background="@android:color/white" />
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/candidateListA"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:overScrollMode="never"
+            android:scrollbars="none" />
     </LinearLayout>
 
-    <!-- Right pane (B) -->
+    <!-- Side B (right column) -->
     <LinearLayout
-        android:id="@+id/paneB"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_weight="1"
+        android:layout_marginStart="8dp"
         android:orientation="vertical">
 
         <com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui.DrawingView
             android:id="@+id/drawingViewB"
             android:layout_width="match_parent"
-            android:layout_height="180dp"
-            android:layout_marginTop="6dp"
+            android:layout_height="140dp"
             android:background="@android:color/white" />
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/candidateListB"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:overScrollMode="never"
+            android:scrollbars="none" />
     </LinearLayout>
 
 </LinearLayout>

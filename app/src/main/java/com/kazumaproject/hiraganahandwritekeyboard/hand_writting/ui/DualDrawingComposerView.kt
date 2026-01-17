@@ -4,8 +4,8 @@ import android.content.Context
 import android.util.AttributeSet
 import android.view.LayoutInflater
 import android.widget.LinearLayout
+import androidx.recyclerview.widget.RecyclerView
 import com.kazumaproject.hiraganahandwritekeyboard.databinding.ViewDualDrawingBinding
-
 
 class DualDrawingComposerView @JvmOverloads constructor(
     context: Context,
@@ -17,6 +17,10 @@ class DualDrawingComposerView @JvmOverloads constructor(
 
     val viewA: DrawingView get() = vb.drawingViewA
     val viewB: DrawingView get() = vb.drawingViewB
+
+    // ★追加: 候補リスト
+    val candidateListA: RecyclerView get() = vb.candidateListA
+    val candidateListB: RecyclerView get() = vb.candidateListB
 
     enum class Side { A, B }
 
