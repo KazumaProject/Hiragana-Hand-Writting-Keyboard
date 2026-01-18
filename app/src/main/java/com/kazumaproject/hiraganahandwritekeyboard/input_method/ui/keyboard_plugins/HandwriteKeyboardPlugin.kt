@@ -18,6 +18,7 @@ import com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui.DualDrawingC
 import com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui.HiraCtcRecognizer
 import com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui.utils.BitmapPreprocessor
 import com.kazumaproject.hiraganahandwritekeyboard.input_method.domain.KeyboardAction
+import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.HostEvent
 import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.ImeController
 import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.KeyboardPlugin
 import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.widgets.CursorNavView
@@ -97,6 +98,84 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
     object HandwriteUiConfig {
         @Volatile
         var keyRowsMode: KeyRowsMode = KeyRowsMode.RIGHT_ONLY
+    }
+
+    /**
+     * CTC候補の「派生文字」を元候補の直後に差し込む設定。
+     *
+     * 例:
+     *  - "あ" -> "ぁ"
+     *  - "か" -> "が"
+     *  - "は" -> "ば","ぱ"
+     */
+    object HandwriteCandidateVariantConfig {
+
+        @Volatile
+        var enabled: Boolean = true
+
+        /**
+         * 既に候補内に同じ文字が存在する場合、重複を除外するか
+         */
+        @Volatile
+        var dedupeByText: Boolean = true
+
+        /**
+         * 派生候補の percent を元候補に対してどれくらい下げるか（0.0〜1.0）
+         * 例: 0.90 なら元候補が 80% のとき派生候補は 72% として表示
+         */
+        @Volatile
+        var variantPercentFactor: Double = 0.90
+
+        /**
+         * 元文字 -> 追加したい派生候補（表示順）
+         */
+        val variants: MutableMap<String, List<String>> = linkedMapOf(
+            "あ" to listOf("ぁ"),
+            "い" to listOf("ぃ"),
+            "う" to listOf("ぅ", "ゔ"),
+            "え" to listOf("ぇ"),
+            "お" to listOf("ぉ"),
+
+            "や" to listOf("ゃ"),
+            "ゆ" to listOf("ゅ"),
+            "よ" to listOf("ょ"),
+            "つ" to listOf("っ"),
+            "わ" to listOf("ゎ"),
+
+            // 濁点例（あなたの要望）
+            "か" to listOf("が"),
+            "き" to listOf("ぎ"),
+            "く" to listOf("ぐ"),
+            "け" to listOf("げ"),
+            "こ" to listOf("ご"),
+
+            "さ" to listOf("ざ"),
+            "し" to listOf("じ"),
+            "す" to listOf("ず"),
+            "せ" to listOf("ぜ"),
+            "そ" to listOf("ぞ"),
+
+            "た" to listOf("だ"),
+            "ち" to listOf("ぢ"),
+            "つ" to listOf("づ", "っ"), // 例: つ->づ と小つ(っ)も欲しい場合
+            "て" to listOf("で"),
+            "と" to listOf("ど"),
+
+            // 半濁点（あなたの要望: は->ば,ぱ）
+            "は" to listOf("ば", "ぱ"),
+            "ひ" to listOf("び", "ぴ"),
+            "ふ" to listOf("ぶ", "ぷ"),
+            "へ" to listOf("べ", "ぺ"),
+            "ほ" to listOf("ぼ", "ぽ")
+        )
+
+        fun setVariants(base: String, list: List<String>) {
+            variants[base] = list
+        }
+
+        fun removeVariants(base: String) {
+            variants.remove(base)
+        }
     }
 
     fun setKeyRowsMode(mode: KeyRowsMode) {
@@ -205,6 +284,13 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         // ---- single candidate list ----
         adapter = CtcCandidateAdapter { c ->
             onCandidateTapped(dual, activeSide, c, controller)
+            dual.clearBoth()
+
+            submitCandidates(emptyList())
+
+            activePreviewLen = 0
+            genA++
+            genB++
         }
         dual.candidateList.layoutManager =
             LinearLayoutManager(parent.context, LinearLayoutManager.HORIZONTAL, false)
@@ -312,6 +398,34 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         lastDualRef = null
         lastControllerRef = null
         adapter = null
+    }
+
+    override fun onHostEvent(event: HostEvent) {
+        when (event) {
+            HostEvent.CandidateAdapterClicked -> {
+                resetInkAndCandidates()
+            }
+        }
+    }
+
+    private fun resetInkAndCandidates() {
+        val dual = lastDualRef ?: return
+
+        // ink をクリア
+        dual.clearBoth()
+
+        // 候補リストをクリア
+        submitCandidates(emptyList())
+
+        // 置換状態をリセット
+        activePreviewLen = 0
+
+        // 旧ジョブ結果で上書きされないように世代を進める
+        genA++
+        genB++
+
+        // 推論ジョブも止めておくのが安全
+        cancelInferJobs()
     }
 
     // ---------------- dynamic recalc ----------------
@@ -663,7 +777,8 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
 
             // 1リストなので、activeSide の結果だけ表示
             if (side == activeSide) {
-                submitCandidates(filtered)
+                val shown = expandCandidatesWithVariants(filtered)
+                submitCandidates(shown)
             }
 
             if (side != activeSide) return@launch
@@ -675,6 +790,56 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         }
 
         if (side == DualDrawingComposerView.Side.A) inferJobA = newJob else inferJobB = newJob
+    }
+
+    /**
+     * CTC候補を表示用に展開して「派生文字」を元候補の直後に差し込む。
+     *
+     * 例:
+     *  - ["あ","か","は"] -> ["あ","ぁ","か","が","は","ば","ぱ"]
+     */
+    private fun expandCandidatesWithVariants(original: List<CtcCandidate>): List<CtcCandidate> {
+        if (!HandwriteCandidateVariantConfig.enabled) return original
+        if (original.isEmpty()) return original
+
+        val map = HandwriteCandidateVariantConfig.variants
+        if (map.isEmpty()) return original
+
+        val factor = HandwriteCandidateVariantConfig.variantPercentFactor
+            .coerceIn(0.0, 1.0)
+
+        val out = ArrayList<CtcCandidate>(original.size * 2)
+
+        // 重複排除（任意）
+        val seen =
+            if (HandwriteCandidateVariantConfig.dedupeByText) LinkedHashSet<String>() else null
+
+        fun addCandidate(c: CtcCandidate) {
+            if (seen == null) {
+                out.add(c); return
+            }
+            if (seen.add(c.text)) out.add(c)
+        }
+
+        for (base in original) {
+            addCandidate(base)
+
+            val variants = map[base.text].orEmpty()
+            if (variants.isEmpty()) continue
+
+            // 派生候補は元候補より少し percent を下げる（同格に見えないように）
+            // さらに複数ある場合は、後ろほどわずかに下げる
+            variants.forEachIndexed { idx, v ->
+                val penalty = (factor - idx * 0.02).coerceIn(0.0, 1.0)
+                val derived = base.copy(
+                    text = v,
+                    percent = (base.percent * penalty).coerceIn(0.0, 100.0)
+                )
+                addCandidate(derived)
+            }
+        }
+
+        return out
     }
 
     private fun submitCandidates(list: List<CtcCandidate>) {

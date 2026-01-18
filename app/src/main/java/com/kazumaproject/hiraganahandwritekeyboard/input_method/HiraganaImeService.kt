@@ -571,12 +571,20 @@ class HiraganaImeService : InputMethodService() {
 
     // ---------------- Candidates (RecyclerView) ----------------
 
+
+    private fun notifyPluginCandidateAdapterClicked() {
+        currentPlugin?.onHostEvent(
+            com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.HostEvent.CandidateAdapterClicked
+        )
+    }
+
     private fun setupCandidatesRecycler() {
         val rv = candidateRecycler ?: return
 
         rv.layoutManager = LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)
         candidateAdapter = CandidateAdapter(
             onClick = { candidate ->
+                notifyPluginCandidateAdapterClicked()
                 if (inputMode != InputMode.PREEDIT) return@CandidateAdapter
                 // Candidateモード中のタップは「その候補を選択してプレビュー」→ Enterと同じで確定したければEnter
                 if (inCandidateMode) {

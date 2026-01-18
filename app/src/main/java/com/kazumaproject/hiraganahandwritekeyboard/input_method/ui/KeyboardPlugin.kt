@@ -12,4 +12,6 @@ interface KeyboardPlugin {
     fun onSelected() {}
     fun onUnselected() {}
     fun onDestroy() {}
+
+    fun onHostEvent(event: HostEvent) {}
 }
