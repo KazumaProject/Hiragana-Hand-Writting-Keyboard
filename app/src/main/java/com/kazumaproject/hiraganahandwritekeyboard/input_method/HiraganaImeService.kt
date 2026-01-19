@@ -106,7 +106,7 @@ class HiraganaImeService : InputMethodService() {
     // composing (preedit)
     private val composing = StringBuilder()
     private var cursor = 0 // 0..composing.length
-    private var inputMode: InputMode = InputMode.DIRECT
+    private var inputMode: InputMode = InputMode.PREEDIT
 
     // Candidate Mode (Preedit のサブ状態)
     private var inCandidateMode: Boolean = false
@@ -779,7 +779,7 @@ class HiraganaImeService : InputMethodService() {
     // ---------------- Input Mode ----------------
 
     private fun loadInputMode(): InputMode {
-        return when (prefs.getString(KEY_INPUT_MODE, "direct")) {
+        return when (prefs.getString(KEY_INPUT_MODE, "preedit")) {
             "preedit" -> InputMode.PREEDIT
             else -> InputMode.DIRECT
         }
@@ -1281,7 +1281,7 @@ class HiraganaImeService : InputMethodService() {
         val savedH = prefs.getInt(KEY_PANEL_H, -1)
 
         val defaultW = clamp((resources.displayMetrics.widthPixels * 0.95f).toInt(), b.minW, b.maxW)
-        val defaultH = clamp(dpToPx(220f), b.minH, b.maxH)
+        val defaultH = clamp(dpToPx(360f), b.minH, b.maxH)
 
         val w = if (savedW > 0) clamp(savedW, b.minW, b.maxW) else defaultW
         val h = if (savedH > 0) clamp(savedH, b.minH, b.maxH) else defaultH
