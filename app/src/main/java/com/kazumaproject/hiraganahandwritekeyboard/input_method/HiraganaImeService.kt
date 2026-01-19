@@ -30,6 +30,13 @@ import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.KeyboardRegis
 import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.adapters.CandidateAdapter
 import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.keyboard_plugins.HandwriteKeyboardPlugin
 import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.keyboard_plugins.NumberKeyboardPlugin
+import com.kazumaproject.kana_kanji_converter.KanaKanjiConverter
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.max
 import kotlin.math.min
 
@@ -265,9 +272,39 @@ class HiraganaImeService : InputMethodService() {
         }
     }
 
+    // --- Kana-Kanji converter (JNI) ---
+    private val kkConverter = KanaKanjiConverter(assetDir = "kk_dict")
+
+    @Volatile
+    private var kkReady: Boolean = false
+
+    private val serviceJob = SupervisorJob()
+    private val serviceScope = CoroutineScope(serviceJob + Dispatchers.Main)
+
+    private var candJob: Job? = null
+
+    /**
+     * 変換候補の「取り違え防止キー」
+     * - lastCandKey: 最新要求のキー（進行中含む）
+     * - lastCandidatesKey: lastCandidates が対応しているキー
+     */
+    private var lastCandKey: String = ""
+    private var lastCandidatesKey: String = ""
+
     override fun onCreate() {
         super.onCreate()
         prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE)
+
+        // JNI辞書初期化（重いのでバックグラウンド）
+        serviceScope.launch(Dispatchers.IO) {
+            runCatching {
+                kkConverter.init(this@HiraganaImeService)
+            }.onSuccess {
+                kkReady = true
+            }.onFailure {
+                kkReady = false
+            }
+        }
     }
 
     override fun onCreateInputView(): View {
@@ -395,6 +432,8 @@ class HiraganaImeService : InputMethodService() {
 
         // 初期状態：候補なしなので topRow 表示
         lastCandidates = emptyList()
+        lastCandKey = ""
+        lastCandidatesKey = ""
         updateCandidateTopRowVisibility(hasCandidates = false)
         updateActionKeyLabels()
 
@@ -416,6 +455,10 @@ class HiraganaImeService : InputMethodService() {
         candidatePreviewBaseCursor = 0
         candidateAdapter?.setSelectedIndex(-1)
 
+        lastCandidates = emptyList()
+        lastCandKey = ""
+        lastCandidatesKey = ""
+
         setStatus("Input started")
         updateInputModeUi()
         applyKeyboardSelectorModeUi()
@@ -424,6 +467,8 @@ class HiraganaImeService : InputMethodService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        candJob?.cancel()
+        serviceJob.cancel()
         currentPlugin?.onDestroy()
     }
 
@@ -571,7 +616,6 @@ class HiraganaImeService : InputMethodService() {
 
     // ---------------- Candidates (RecyclerView) ----------------
 
-
     private fun notifyPluginCandidateAdapterClicked() {
         currentPlugin?.onHostEvent(
             com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.HostEvent.CandidateAdapterClicked
@@ -600,26 +644,112 @@ class HiraganaImeService : InputMethodService() {
         rv.visibility = View.GONE
     }
 
-    private fun computeCandidatesForCurrentBg(text: String): List<String> {
-        if (inputMode != InputMode.PREEDIT || text.isEmpty()) return emptyList()
+    /**
+     * 候補要求キー（取り違え防止用）
+     * 候補自体は bgSub にのみ依存するが、UI整合性のため composing/cursor/len も含める。
+     */
+    private fun makeCandidateKey(bgSub: String, fullLen: Int, cursorPos: Int): String {
+        return "$bgSub#$cursorPos#$fullLen"
+    }
 
-        val bgSub = try {
-            val b = bgRange
-            if (b.isEmpty()) "" else text.substring(b.start, b.endExclusive)
+    /**
+     * 現在の composing から bgRange 部分（読み）を安全に取り出す。
+     */
+    private fun extractBgSubstring(fullText: String): String {
+        val b = bgRange
+        if (b.isEmpty()) return ""
+        return try {
+            fullText.substring(b.start, b.endExclusive)
         } catch (_: Throwable) {
             ""
         }
+    }
 
-        if (bgSub.isEmpty()) return emptyList()
+    /**
+     * 変換候補は「かな漢字変換結果のみ」。
+     * 以前入っていた「ひらがな/カタカナ候補」は要件により廃止。
+     */
+    private fun computeCandidatesForBgSync(bgSub: String): List<String> {
+        if (bgSub.isBlank()) return emptyList()
+        if (!kkReady) return emptyList()
 
-        val hira = toHiragana(bgSub)
-        val kata = toKatakana(bgSub)
+        val yomi = toHiragana(bgSub)
 
-        val out = linkedSetOf<String>()
-        out.add(hira)
-        out.add(kata)
+        val results = runCatching {
+            kkConverter.convert(
+                queryUtf8 = yomi,
+                nBest = 20,
+                beamWidth = 20,
+                showBunsetsu = true,
+                yomiMode = 3,
+                predK = 1,
+                showPred = false,
+                showOmit = true,
+                yomiLimit = 200,
+                finalLimit = 50,
+            )
+        }.getOrNull() ?: return emptyList()
 
+        val out = LinkedHashSet<String>(results.size)
+        for (c in results) {
+            val s = c.surface
+            if (!s.isNullOrBlank()) out.add(s)
+        }
         return out.toList()
+    }
+
+    /**
+     * 非同期で候補を要求して UI に反映する。
+     * - renderComposing() は「要求を出す」だけ
+     * - UIへの反映はこの関数の Main スレッド部分に集約
+     */
+    private fun requestCandidatesAsync(fullText: String, bgSub: String) {
+        // Preedit 以外・空文字は候補なし
+        if (inputMode != InputMode.PREEDIT || fullText.isEmpty() || bgSub.isEmpty()) {
+            lastCandidates = emptyList()
+            lastCandKey = ""
+            lastCandidatesKey = ""
+            candidateAdapter?.submit(emptyList())
+            updateCandidateTopRowVisibility(hasCandidates = false)
+            updateActionKeyLabels()
+            return
+        }
+
+        val key = makeCandidateKey(bgSub, fullText.length, cursor)
+        lastCandKey = key
+
+        candJob?.cancel()
+        candJob = serviceScope.launch(Dispatchers.Default) {
+            val list = computeCandidatesForBgSync(bgSub)
+
+            withContext(Dispatchers.Main) {
+                // 途中で状態が変わっていたら捨てる
+                if (lastCandKey != key) return@withContext
+                if (inputMode != InputMode.PREEDIT) return@withContext
+                if (composing.toString() != fullText) return@withContext
+
+                lastCandidates = list
+                lastCandidatesKey = key
+                candidateAdapter?.submit(list)
+
+                // CandidateMode 整合性
+                if (inCandidateMode) {
+                    if (list.isEmpty() || bgRange.isEmpty()) {
+                        inCandidateMode = false
+                        candidatePreviewBaseText = null
+                        candidatePreviewBaseCursor = 0
+                        candidateAdapter?.setSelectedIndex(-1)
+                    } else {
+                        val curIdx = candidateAdapter?.getSelectedIndex() ?: -1
+                        val keepIdx = if (curIdx in list.indices) curIdx else 0
+                        candidateAdapter?.setSelectedIndex(keepIdx)
+                    }
+                }
+
+                updateCandidateTopRowVisibility(hasCandidates = list.isNotEmpty())
+                updateActionKeyLabels()
+            }
+        }
     }
 
     /**
@@ -675,10 +805,14 @@ class HiraganaImeService : InputMethodService() {
         candidatePreviewBaseCursor = 0
         candidateAdapter?.setSelectedIndex(-1)
 
+        // 候補状態を破棄（次の renderComposing で新規要求）
+        lastCandidates = emptyList()
+        lastCandKey = ""
+        lastCandidatesKey = ""
+
         if (composing.isNotEmpty()) {
             renderComposing()
         } else {
-            lastCandidates = emptyList()
             candidateAdapter?.submit(emptyList())
             updateCandidateTopRowVisibility(hasCandidates = false)
             updateActionKeyLabels()
@@ -806,7 +940,11 @@ class HiraganaImeService : InputMethodService() {
                 composing.setLength(0)
                 cursor = 0
             }
+
             lastCandidates = emptyList()
+            lastCandKey = ""
+            lastCandidatesKey = ""
+
             candidateAdapter?.submit(emptyList())
             updateCandidateTopRowVisibility(hasCandidates = false)
             updateActionKeyLabels()
@@ -818,19 +956,31 @@ class HiraganaImeService : InputMethodService() {
 
     // ---------------- Candidate Mode helpers ----------------
 
+    private fun currentCandidateKeyForNow(text: String): String {
+        val bgSub = extractBgSubstring(text)
+        if (bgSub.isEmpty()) return ""
+        return makeCandidateKey(bgSub, text.length, cursor)
+    }
+
     private fun shouldEnterCandidateMode(): Boolean {
         if (inputMode != InputMode.PREEDIT) return false
         if (composing.isEmpty()) return false
         if (inCandidateMode) return false
-        // bgに文字があり、候補がある
-        return !bgRange.isEmpty() && lastCandidates.isNotEmpty()
+        if (bgRange.isEmpty()) return false
+
+        // 「今の composing/cursor/bgSub に対する候補が確定して存在している」場合のみ true
+        val keyNow = currentCandidateKeyForNow(composing.toString())
+        return keyNow.isNotEmpty() && (lastCandidatesKey == keyNow) && lastCandidates.isNotEmpty()
     }
 
     private fun enterCandidateMode() {
         if (inputMode != InputMode.PREEDIT) return
         if (composing.isEmpty()) return
-        if (lastCandidates.isEmpty()) return
         if (bgRange.isEmpty()) return
+
+        // 候補が今のキーに紐付いていることを保証
+        val keyNow = currentCandidateKeyForNow(composing.toString())
+        if (keyNow.isEmpty() || lastCandidatesKey != keyNow || lastCandidates.isEmpty()) return
 
         // ここで初めて「選択状態」にする
         inCandidateMode = true
@@ -958,10 +1108,14 @@ class HiraganaImeService : InputMethodService() {
         val spaceBtn = btnSpaceInKeyboard
         val enterBtn = btnEnterInKeyboard
 
-        val canConvert = (inputMode == InputMode.PREEDIT) &&
-                composing.isNotEmpty() &&
-                !bgRange.isEmpty() &&
-                lastCandidates.isNotEmpty()
+        val textNow = composing.toString()
+        val canConvert = run {
+            if (inputMode != InputMode.PREEDIT) return@run false
+            if (textNow.isEmpty()) return@run false
+            if (bgRange.isEmpty()) return@run false
+            val keyNow = currentCandidateKeyForNow(textNow)
+            keyNow.isNotEmpty() && (lastCandidatesKey == keyNow) && lastCandidates.isNotEmpty()
+        }
 
         when {
             inCandidateMode -> {
@@ -998,7 +1152,11 @@ class HiraganaImeService : InputMethodService() {
             inCandidateMode = false
             candidatePreviewBaseText = null
             candidatePreviewBaseCursor = 0
+
             lastCandidates = emptyList()
+            lastCandKey = ""
+            lastCandidatesKey = ""
+
             candidateAdapter?.submit(emptyList())
             updateCandidateTopRowVisibility(hasCandidates = false)
             updateActionKeyLabels()
@@ -1017,7 +1175,11 @@ class HiraganaImeService : InputMethodService() {
             inCandidateMode = false
             candidatePreviewBaseText = null
             candidatePreviewBaseCursor = 0
+
             lastCandidates = emptyList()
+            lastCandKey = ""
+            lastCandidatesKey = ""
+
             candidateAdapter?.submit(emptyList())
             updateCandidateTopRowVisibility(hasCandidates = false)
             updateActionKeyLabels()
@@ -1030,30 +1192,33 @@ class HiraganaImeService : InputMethodService() {
 
         updateDecorRangesForRender(len)
 
-        // candidates compute & apply
-        val list = computeCandidatesForCurrentBg(text)
-        lastCandidates = list
-        candidateAdapter?.submit(list)
+        // bgSub を抽出して候補を非同期要求（表示は async が持つ）
+        val bgSub = extractBgSubstring(text)
+        requestCandidatesAsync(fullText = text, bgSub = bgSub)
 
-        // CandidateMode維持の整合性（選択は保持。勝手に0へ戻さない）
+        // 現時点で「候補が確定しているか」をキーで判断
+        val keyNow = if (bgSub.isNotEmpty()) makeCandidateKey(bgSub, len, cursor) else ""
+        val hasCandidatesNow =
+            keyNow.isNotEmpty() && (lastCandidatesKey == keyNow) && lastCandidates.isNotEmpty()
+
+        // CandidateMode維持の整合性（候補未確定の間は勝手に入らない / 既存選択は保持）
         if (inCandidateMode) {
-            if (list.isEmpty() || bgRange.isEmpty()) {
+            if (!hasCandidatesNow || bgRange.isEmpty()) {
                 inCandidateMode = false
                 candidatePreviewBaseText = null
                 candidatePreviewBaseCursor = 0
                 candidateAdapter?.setSelectedIndex(-1)
             } else {
                 val curIdx = candidateAdapter?.getSelectedIndex() ?: -1
-                val keepIdx = if (curIdx in list.indices) curIdx else 0
+                val keepIdx = if (curIdx in lastCandidates.indices) curIdx else 0
                 candidateAdapter?.setSelectedIndex(keepIdx)
             }
         }
 
-        updateCandidateTopRowVisibility(hasCandidates = list.isNotEmpty())
+        updateCandidateTopRowVisibility(hasCandidates = hasCandidatesNow)
         updateActionKeyLabels()
 
         val spannable = buildComposingSpannable(text, bgRange, ulRange)
-
         ic.setComposingText(spannable, 1)
 
         val req = ExtractedTextRequest().apply {

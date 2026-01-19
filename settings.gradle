@@ -21,3 +21,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "HiraganaHandWriteKeyboard"
 include ':app'
+include ':kana_kanji_converter'

@@ -29,7 +29,7 @@ class DrawingView @JvmOverloads constructor(
     private val redoStack = ArrayList<Stroke>()
 
     private var currentPath: Path? = null
-    private var currentStrokeWidthPx: Float = 32f
+    private var currentStrokeWidthPx: Float = 14f
 
     private var lastX = 0f
     private var lastY = 0f
