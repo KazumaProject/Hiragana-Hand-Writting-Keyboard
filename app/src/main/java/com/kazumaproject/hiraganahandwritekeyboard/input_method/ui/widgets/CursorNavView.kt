@@ -1,4 +1,3 @@
-// app/src/main/java/com/kazumaproject/hiraganahandwritekeyboard/input_method/ui/widgets/CursorNavView.kt
 package com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.widgets
 
 import android.content.Context
@@ -11,9 +10,8 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.widget.Button
 import android.widget.LinearLayout
-import androidx.annotation.ColorRes
-import androidx.annotation.DrawableRes
 import androidx.core.content.ContextCompat
+import com.kazumaproject.hiraganahandwritekeyboard.R
 import kotlin.math.abs
 import kotlin.math.max
 
@@ -37,36 +35,15 @@ class CursorNavView @JvmOverloads constructor(
         fun onAction(side: Side, action: Action)
     }
 
-    enum class UiMode { LIGHT, DARK }
-
-    data class Style(
-        @DrawableRes val backgroundResId: Int? = null,
-        @ColorRes val textColorResId: Int? = null
-    )
-
     private var listener: Listener? = null
-    private var uiMode: UiMode = UiMode.LIGHT
-    private var lightStyle: Style? = null
-    private var darkStyle: Style? = null
 
     fun setListener(l: Listener?) {
         listener = l
     }
 
-    fun setStyles(light: Style?, dark: Style?) {
-        lightStyle = light
-        darkStyle = dark
-        applyCurrentStyle()
-    }
-
-    fun setUiMode(mode: UiMode) {
-        if (uiMode == mode) return
-        uiMode = mode
-        applyCurrentStyle()
-    }
-
     private val leftBtn: Button
     private val rightBtn: Button
+
     private var buttonHeightPx: Int = dpToPx(44f)
 
     init {
@@ -74,20 +51,43 @@ class CursorNavView @JvmOverloads constructor(
 
         leftBtn = Button(context).apply {
             text = "◀"
+            // ★左右で同じ見た目にする
             isAllCaps = false
             setPadding(0, 0, 0, 0)
             minWidth = 0
             minimumWidth = 0
+
+            background = ContextCompat.getDrawable(
+                context, R.drawable.clay_button_bg
+            )
+
+            setTextColor(
+                ContextCompat.getColor(
+                    context, R.color.clay_text
+                )
+            )
         }
 
         rightBtn = Button(context).apply {
             text = "▶"
+            // ★左右で同じ見た目にする
             isAllCaps = false
             setPadding(0, 0, 0, 0)
             minWidth = 0
             minimumWidth = 0
+
+            background = ContextCompat.getDrawable(
+                context, R.drawable.clay_button_bg
+            )
+
+            setTextColor(
+                ContextCompat.getColor(
+                    context, R.color.clay_text
+                )
+            )
         }
 
+        // ★重要：LayoutParams を使い回さない（左右で別インスタンス）
         applyButtonHeightInternal(buttonHeightPx)
 
         addView(leftBtn)
@@ -97,11 +97,17 @@ class CursorNavView @JvmOverloads constructor(
         rightBtn.setOnTouchListener(NavTouchHandler(Side.RIGHT))
     }
 
+    /**
+     * 外からキー高さに合わせたい時に呼ぶ（例：keyRows の minHeightDp）
+     */
     fun setButtonHeightDp(dp: Float) {
         val px = dpToPx(dp)
         applyButtonHeightInternal(px)
     }
 
+    /**
+     * アイコン（文字）の見た目を揃えるため、明示的にテキストサイズを固定できるようにする
+     */
     fun setIconTextSizeSp(sp: Float) {
         leftBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
         rightBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
@@ -120,31 +126,6 @@ class CursorNavView @JvmOverloads constructor(
         rightBtn.minHeight = buttonHeightPx
 
         requestLayout()
-    }
-
-    private fun currentStyle(): Style? {
-        return when (uiMode) {
-            UiMode.LIGHT -> lightStyle
-            UiMode.DARK -> darkStyle
-        }
-    }
-
-    private fun applyCurrentStyle() {
-        val s = currentStyle() ?: return
-
-        s.backgroundResId?.let { resId ->
-            leftBtn.setBackgroundResource(resId)
-            rightBtn.setBackgroundResource(resId)
-        }
-
-        // 要求：@color/clay_text を resId で適用
-        s.textColorResId?.let { colorRes ->
-            val csl = ContextCompat.getColorStateList(context, colorRes)
-            leftBtn.setTextColor(csl)
-            rightBtn.setTextColor(csl)
-        }
-
-        invalidate()
     }
 
     private inner class NavTouchHandler(

@@ -1,4 +1,3 @@
-// app/src/main/java/com/kazumaproject/hiraganahandwritekeyboard/input_method/ui/widgets/KeyboardKeyRowsView.kt
 package com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.widgets
 
 import android.content.Context
@@ -13,6 +12,8 @@ import android.view.ViewGroup
 import android.widget.Button
 import android.widget.LinearLayout
 import androidx.core.content.ContextCompat
+import androidx.core.view.setMargins
+import com.kazumaproject.hiraganahandwritekeyboard.R
 import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.ImeController
 import kotlin.math.abs
 import kotlin.math.max
@@ -22,46 +23,22 @@ class KeyboardKeyRowsView @JvmOverloads constructor(
     attrs: AttributeSet? = null
 ) : LinearLayout(context, attrs) {
 
-    enum class UiMode { LIGHT, DARK }
-
     private val buttonMap: MutableMap<String, Button> = linkedMapOf()
     private val viewMap: MutableMap<String, View> = linkedMapOf()
+
+    // 生成した rowLayout を保持（高さ再配分に使う）
     private val rowLayouts: MutableList<LinearLayout> = mutableListOf()
 
+    // 最後にセットされた rows を保持（回転/サイズ変更などで再配分するため）
     private var lastRows: List<List<KeyboardKeySpec>> = emptyList()
     private var lastController: ImeController? = null
 
-    private var uiMode: UiMode = UiMode.LIGHT
-    private var defaultLightStyle: KeyboardKeySpec.ButtonStyle? = null
-    private var defaultDarkStyle: KeyboardKeySpec.ButtonStyle? = null
-
     init {
         orientation = VERTICAL
+        // 上部に“余白があるように見える”のを抑止
         setPadding(0, 0, 0, 0)
         clipToPadding = false
         clipChildren = false
-    }
-
-    /**
-     * RowsView が生成する Button のデフォルト見た目（ライト/ダーク）を設定する。
-     * setRows() の前後どちらでもOK（後から呼ぶと生成済みに再適用）
-     */
-    fun setDefaultButtonStyles(
-        light: KeyboardKeySpec.ButtonStyle?,
-        dark: KeyboardKeySpec.ButtonStyle?
-    ) {
-        defaultLightStyle = light
-        defaultDarkStyle = dark
-        applyCurrentStylesToAllButtons()
-    }
-
-    /**
-     * ライト/ダーク切替（生成済みボタンにも反映）
-     */
-    fun setUiMode(mode: UiMode) {
-        if (uiMode == mode) return
-        uiMode = mode
-        applyCurrentStylesToAllButtons()
     }
 
     fun setRows(rows: List<List<KeyboardKeySpec>>, controller: ImeController) {
@@ -73,6 +50,7 @@ class KeyboardKeyRowsView @JvmOverloads constructor(
         viewMap.clear()
         rowLayouts.clear()
 
+        // RowsView 自体の padding が XML 等で入っても見た目が崩れないよう、ここで強制的に 0
         setPadding(0, 0, 0, 0)
 
         rows.forEachIndexed { rowIndex, row ->
@@ -81,6 +59,7 @@ class KeyboardKeyRowsView @JvmOverloads constructor(
                 setPadding(0, 0, 0, 0)
                 clipToPadding = false
                 clipChildren = false
+
                 layoutParams = LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
@@ -96,20 +75,32 @@ class KeyboardKeyRowsView @JvmOverloads constructor(
                             text = spec.text
                             isEnabled = spec.enabled
 
+                            // ここは「固定minHeight」を捨てて、親の再配分に追従させる
                             minHeight = 0
                             minimumHeight = 0
 
+                            // 横幅は weight、縦は row の高さに合わせる（後で MATCH_PARENT に揃える）
                             layoutParams = LayoutParams(
                                 0,
                                 ViewGroup.LayoutParams.MATCH_PARENT,
-                                spec.weight
-                            )
+                                spec.weight,
+                            ).apply {
+                                setMargins(4)
+                            }
 
+                            // 見た目の余白を減らす（上部が空いて見える原因になりやすい）
                             setPadding(0, 0, 0, 0)
                             gravity = android.view.Gravity.CENTER
 
-                            // ★ここで background / textColor を resId で適用（要求対応）
-                            applyStyleToButton(this, spec.style)
+                            background = ContextCompat.getDrawable(
+                                context, R.drawable.clay_button_bg
+                            )
+
+                            setTextColor(
+                                ContextCompat.getColor(
+                                    context, R.color.clay_text
+                                )
+                            )
 
                             if (spec.enableGestures) {
                                 setOnTouchListener(ButtonKeyTouchListener(controller, spec))
@@ -124,16 +115,21 @@ class KeyboardKeyRowsView @JvmOverloads constructor(
 
                     is KeyboardKeySpec.CustomViewKey -> {
                         val v = spec.createView(context, rowLayout, controller).apply {
+                            // 縦は row の高さに追従させたいので MATCH_PARENT
                             layoutParams = LayoutParams(
                                 0,
                                 ViewGroup.LayoutParams.MATCH_PARENT,
                                 spec.weight
                             )
+
+                            // minHeight は RowsView の配分に邪魔になるので 0
                             minimumHeight = 0
                             isEnabled = spec.enabled
+
                             setPadding(0, 0, 0, 0)
                         }
 
+                        // CustomView に RowsView 側でジェスチャーを付与したい場合のみ
                         if (spec.enableGestures && spec.onGesture != null) {
                             v.isClickable = true
                             v.setOnTouchListener(CustomViewTouchListener(controller, spec))
@@ -150,6 +146,7 @@ class KeyboardKeyRowsView @JvmOverloads constructor(
             addView(rowLayout)
         }
 
+        // レイアウト確定後に、RowsView の実高さに合わせて行の高さを配分
         post { distributeRowHeights() }
     }
 
@@ -158,15 +155,24 @@ class KeyboardKeyRowsView @JvmOverloads constructor(
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        if (h != oldh) post { distributeRowHeights() }
+        if (h != oldh) {
+            // パネルリサイズ等で高さが変わったら再配分
+            post { distributeRowHeights() }
+        }
     }
 
+    /**
+     * RowsView の実高さを rowsCount で割って、各 rowLayout の高さを再配分する。
+     * - ボタン数が多くても必ず収まる（小さくはなる）
+     * - 上に余白があるように見える問題も、row を上から詰めるので抑制される
+     */
     private fun distributeRowHeights() {
         val totalH = height - paddingTop - paddingBottom
         if (totalH <= 0) return
         val rowsCount = rowLayouts.size
         if (rowsCount <= 0) return
 
+        // 均等割り（余りは上から順に +1px）
         val base = totalH / rowsCount
         val rem = totalH % rowsCount
 
@@ -177,12 +183,14 @@ class KeyboardKeyRowsView @JvmOverloads constructor(
             lp.width = ViewGroup.LayoutParams.MATCH_PARENT
             rowLayout.layoutParams = lp
 
+            // 子は row 高さに合わせて縦に満たす
             for (i in 0 until rowLayout.childCount) {
                 val child = rowLayout.getChildAt(i)
                 val clp = child.layoutParams as LayoutParams
                 clp.height = ViewGroup.LayoutParams.MATCH_PARENT
                 child.layoutParams = clp
 
+                // Button の minHeight が残っていると押し戻すことがあるので保険で 0
                 if (child is Button) {
                     child.minHeight = 0
                     child.minimumHeight = 0
@@ -190,45 +198,6 @@ class KeyboardKeyRowsView @JvmOverloads constructor(
             }
         }
         requestLayout()
-    }
-
-    // ---------------- Style application (resId) ----------------
-
-    private fun currentDefaultStyle(): KeyboardKeySpec.ButtonStyle? {
-        return when (uiMode) {
-            UiMode.LIGHT -> defaultLightStyle
-            UiMode.DARK -> defaultDarkStyle
-        }
-    }
-
-    /**
-     * spec.style（キー個別）を優先、なければ RowsView のデフォルトを適用
-     */
-    private fun applyStyleToButton(btn: Button, override: KeyboardKeySpec.ButtonStyle?) {
-        val style = override ?: currentDefaultStyle() ?: return
-
-        style.backgroundResId?.let { resId ->
-            btn.setBackgroundResource(resId)
-        }
-
-        // 要求：android:textColor="@color/clay_text" 相当を resId で適用
-        style.textColorResId?.let { colorRes ->
-            btn.setTextColor(ContextCompat.getColorStateList(context, colorRes))
-        }
-    }
-
-    private fun applyCurrentStylesToAllButtons() {
-        val rows = lastRows
-        if (rows.isEmpty()) return
-
-        rows.flatten().forEach { spec ->
-            if (spec is KeyboardKeySpec.ButtonKey) {
-                buttonMap[spec.keyId]?.let { b ->
-                    applyStyleToButton(b, spec.style)
-                }
-            }
-        }
-        invalidate()
     }
 
     // ---------------- Touch Listeners ----------------
@@ -440,6 +409,8 @@ class KeyboardKeyRowsView @JvmOverloads constructor(
             main.removeCallbacks(repeatRunnable)
         }
     }
+
+    // ---------------- util ----------------
 
     private fun dpToPx(dp: Int): Int {
         return TypedValue.applyDimension(

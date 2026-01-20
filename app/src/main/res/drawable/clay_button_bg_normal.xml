@@ -32,6 +32,7 @@
         <shape>
             <corners android:radius="14dp" />
             <solid android:color="@color/clay_button_surface" />
+            <stroke android:color="@color/clay_text" android:width="1dp" />
         </shape>
     </item>
 

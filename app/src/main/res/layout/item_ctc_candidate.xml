@@ -4,7 +4,7 @@
     android:layout_width="wrap_content"
     android:layout_height="wrap_content"
     android:layout_marginEnd="8dp"
-    android:background="@android:drawable/btn_default"
+    android:background="@drawable/clay_button_bg"
     android:ellipsize="end"
     android:gravity="center"
     android:includeFontPadding="false"
@@ -14,5 +14,5 @@
     android:paddingTop="6dp"
     android:paddingEnd="12dp"
     android:paddingBottom="6dp"
-    android:textColor="@android:color/black"
+    android:textColor="@color/clay_text"
     android:textSize="16sp" />
