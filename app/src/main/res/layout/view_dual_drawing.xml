@@ -3,10 +3,10 @@
     android:id="@+id/root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:background="@color/clay_bg"
     android:orientation="vertical"
     android:padding="0dp">
 
-    <!-- 上段: DrawingView を横並び（A/B） -->
     <LinearLayout
         android:id="@+id/drawingRow"
         android:layout_width="match_parent"
@@ -20,22 +20,22 @@
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="1"
-            android:background="@android:color/white" />
+            android:background="@drawable/clay_canvas_bg" />
 
         <com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui.DrawingView
             android:id="@+id/drawingViewB"
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="1"
-            android:background="@android:color/white" />
+            android:background="@drawable/clay_canvas_bg" />
 
     </LinearLayout>
 
-    <!-- 下段: 候補リストは 1つだけ。横幅をフルに使える -->
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/candidateList"
         android:layout_width="match_parent"
         android:layout_height="48dp"
+        android:background="@drawable/clay_canvas_bg_square"
         android:overScrollMode="never"
         android:scrollbars="none" />
 

@@ -2,4 +2,23 @@
 <resources>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+
+    <!-- Clay base palette (Light) -->
+    <color name="clay_bg">#EEF1F5</color>
+    <color name="clay_surface">#E7EBF1</color>
+
+    <!-- Highlights / Shadows -->
+    <color name="clay_highlight">#FFFFFFFF</color>
+    <color name="clay_shadow">#9CA8B8</color>
+
+    <!-- Text -->
+    <color name="clay_text">#121417</color>
+    <color name="clay_text_muted">#5A6573</color>
+
+    <!-- Accent -->
+    <color name="clay_accent">#3B82F6</color>
+
+    <!-- Ink / Guide (handwriting) -->
+    <color name="ink_color">#111315</color>
+    <color name="guide_color">#22000000</color>
 </resources>

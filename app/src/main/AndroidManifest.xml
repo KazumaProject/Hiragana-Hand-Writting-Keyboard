@@ -27,7 +27,8 @@
         <service
             android:name=".input_method.HiraganaImeService"
             android:exported="true"
-            android:permission="android.permission.BIND_INPUT_METHOD">
+            android:permission="android.permission.BIND_INPUT_METHOD"
+            android:theme="@style/Theme.HiraganaHandwriteKeyboard">
             <intent-filter>
                 <action android:name="android.view.InputMethod" />
             </intent-filter>

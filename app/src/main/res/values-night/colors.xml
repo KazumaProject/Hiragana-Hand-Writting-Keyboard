@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+
+    <!-- Clay base palette (Dark) -->
+    <color name="clay_bg">#0F141B</color>
+    <color name="clay_surface">#151C25</color>
+
+    <!-- Highlights / Shadows -->
+    <color name="clay_highlight">#2A3442</color>
+    <color name="clay_shadow">#06080B</color>
+
+    <!-- Text -->
+    <color name="clay_text">#E6EAF0</color>
+    <color name="clay_text_muted">#AAB4C1</color>
+
+    <!-- Accent -->
+    <color name="clay_accent">#60A5FA</color>
+
+    <!-- Ink / Guide (handwriting) -->
+    <color name="ink_color">#E9EDF4</color>
+    <color name="guide_color">#22FFFFFF</color>
+</resources>

@@ -944,8 +944,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             r.inferTopK(
                 bitmap = normalized,
                 topK = topK.coerceAtLeast(1),
-                beamWidth = 25,
-                perStepTop = 25
             )
         } catch (_: Throwable) {
             emptyList()

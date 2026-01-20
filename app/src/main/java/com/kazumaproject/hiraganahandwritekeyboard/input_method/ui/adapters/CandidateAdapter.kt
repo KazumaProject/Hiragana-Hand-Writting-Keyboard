@@ -6,6 +6,7 @@ import android.util.TypedValue
 import android.view.ViewGroup
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
+import com.kazumaproject.hiraganahandwritekeyboard.R
 import kotlin.math.roundToInt
 
 class CandidateAdapter(
@@ -68,7 +69,7 @@ class CandidateAdapter(
                 dp(context, 10),
                 dp(context, 8)
             )
-            setTextColor(Color.BLACK)
+            setTextColor(context.getColor(R.color.clay_text))
             textSize = 16f
         }
 

@@ -3,10 +3,7 @@
     android:id="@+id/imeRootContainer"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:paddingLeft="12dp"
-    android:paddingTop="12dp"
-    android:paddingRight="12dp"
-    android:paddingBottom="12dp">
+    android:background="@color/clay_bg">
 
     <FrameLayout
         android:id="@+id/imePanel"
@@ -22,7 +19,6 @@
             android:orientation="vertical"
             android:padding="12dp">
 
-            <!-- ここを「候補 or topRow」の固定高さホストにする（ズレ防止） -->
             <FrameLayout
                 android:id="@+id/candidateHost"
                 android:layout_width="match_parent"
@@ -35,7 +31,6 @@
                     android:overScrollMode="never"
                     android:visibility="gone" />
 
-                <!-- 上段：ステータス + モード切替 + リサイズ + (TOPROWモード時のみ)プラグイン切替 -->
                 <LinearLayout
                     android:id="@+id/topRow"
                     android:layout_width="match_parent"
@@ -51,6 +46,7 @@
                         android:layout_weight="1"
                         android:paddingBottom="0dp"
                         android:text="status"
+                        android:textColor="@color/clay_text"
                         android:textSize="14sp"
                         android:visibility="gone" />
 
@@ -75,7 +71,6 @@
                         android:paddingRight="10dp"
                         android:text="" />
 
-                    <!-- ★追加：TOPROWモードでのみ表示される「プラグイン切替トグル」 -->
                     <Button
                         android:id="@+id/btnToggleKeyboardTopRow"
                         android:layout_width="wrap_content"
@@ -88,7 +83,6 @@
 
             </FrameLayout>
 
-            <!-- キーボードタイプ切替（タブモードでのみ表示） -->
             <LinearLayout
                 android:id="@+id/keyboardTypeRow"
                 android:layout_width="match_parent"
@@ -98,7 +92,6 @@
                 android:paddingBottom="6dp"
                 android:visibility="gone" />
 
-            <!-- ここにキーボードViewを差し替えて入れる -->
             <FrameLayout
                 android:id="@+id/keyboardContainer"
                 android:layout_width="match_parent"
@@ -106,13 +99,13 @@
                 android:layout_weight="1" />
         </LinearLayout>
 
-        <!-- リサイズ用ハンドル（8点） -->
+        <!-- Resize handles（視認性だけ確保、クレイの邪魔をしない薄さ） -->
         <View
             android:id="@+id/handleLeft"
             android:layout_width="32dp"
             android:layout_height="140dp"
             android:layout_gravity="center_vertical|start"
-            android:background="#33000000"
+            android:background="#22000000"
             android:visibility="gone" />
 
         <View
@@ -120,7 +113,7 @@
             android:layout_width="32dp"
             android:layout_height="140dp"
             android:layout_gravity="center_vertical|end"
-            android:background="#33000000"
+            android:background="#22000000"
             android:visibility="gone" />
 
         <View
@@ -128,7 +121,7 @@
             android:layout_width="140dp"
             android:layout_height="32dp"
             android:layout_gravity="top|center_horizontal"
-            android:background="#33000000"
+            android:background="#22000000"
             android:visibility="gone" />
 
         <View
@@ -136,7 +129,7 @@
             android:layout_width="140dp"
             android:layout_height="32dp"
             android:layout_gravity="bottom|center_horizontal"
-            android:background="#33000000"
+            android:background="#22000000"
             android:visibility="gone" />
 
         <View
@@ -144,7 +137,7 @@
             android:layout_width="44dp"
             android:layout_height="44dp"
             android:layout_gravity="top|start"
-            android:background="#66000000"
+            android:background="#33000000"
             android:visibility="gone" />
 
         <View
@@ -152,7 +145,7 @@
             android:layout_width="44dp"
             android:layout_height="44dp"
             android:layout_gravity="top|end"
-            android:background="#66000000"
+            android:background="#33000000"
             android:visibility="gone" />
 
         <View
@@ -160,7 +153,7 @@
             android:layout_width="44dp"
             android:layout_height="44dp"
             android:layout_gravity="bottom|start"
-            android:background="#66000000"
+            android:background="#33000000"
             android:visibility="gone" />
 
         <View
@@ -168,7 +161,7 @@
             android:layout_width="44dp"
             android:layout_height="44dp"
             android:layout_gravity="bottom|end"
-            android:background="#66000000"
+            android:background="#33000000"
             android:visibility="gone" />
 
     </FrameLayout>

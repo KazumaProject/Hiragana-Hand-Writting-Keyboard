@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Inner-ish shadow feel by swapping highlight/shadow emphasis -->
+    <item
+        android:bottom="6dp"
+        android:left="1dp"
+        android:right="6dp"
+        android:top="1dp">
+        <shape>
+            <corners android:radius="14dp" />
+            <solid android:color="@color/clay_shadow" />
+            <alpha android:alpha="0.20" />
+        </shape>
+    </item>
+
+    <item
+        android:bottom="1dp"
+        android:left="6dp"
+        android:right="1dp"
+        android:top="6dp">
+        <shape>
+            <corners android:radius="14dp" />
+            <solid android:color="@color/clay_highlight" />
+            <alpha android:alpha="0.20" />
+        </shape>
+    </item>
+
+    <item>
+        <shape>
+            <corners android:radius="14dp" />
+            <solid android:color="@color/clay_surface" />
+        </shape>
+    </item>
+
+</layer-list>

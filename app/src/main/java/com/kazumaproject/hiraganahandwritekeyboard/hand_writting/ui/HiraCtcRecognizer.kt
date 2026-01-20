@@ -12,29 +12,25 @@ import org.pytorch.Tensor
 class HiraCtcRecognizer(
     context: Context,
     modelAssetName: String = "model_torchscript.pt",
-    modelFilePath: String? = null, // ★追加：端末から選んだモデル（internalにコピーしたpath）を使う
+    modelFilePath: String? = null,
     vocabAssetName: String = "vocab.json",
     private val cfg: PreprocessConfig = PreprocessConfig()
 ) {
-    // ★ modelFilePath があればそちらを優先
     private val module: Module = if (modelFilePath != null) {
         Module.load(modelFilePath)
     } else {
         val modelPath = AssetUtil.assetFilePath(context, modelAssetName)
         Module.load(modelPath)
     }
+
     private val vocab: CtcVocab
 
     init {
-
         val vocabJson =
             context.assets.open(vocabAssetName).bufferedReader(Charsets.UTF_8).use { it.readText() }
         vocab = CtcVocab.fromJsonString(vocabJson)
     }
 
-    /**
-     * 既存: greedy 1件
-     */
     fun infer(bitmap: Bitmap): String {
         val prep = HiraCtcPreprocess.run(bitmap, cfg)
 
@@ -52,13 +48,13 @@ class HiraCtcRecognizer(
     }
 
     /**
-     * 追加: TopK + percent（上位候補内で正規化した相対%）
+     * 1文字用途に最適化した TopK：
+     * - CTCの「出力が1文字cになる確率」を DP で直接計算
+     * - blank(0) を除いてランキング
      */
     fun inferTopK(
         bitmap: Bitmap,
-        topK: Int = 5,
-        beamWidth: Int = 25,
-        perStepTop: Int = 25
+        topK: Int = 5
     ): List<CtcCandidate> {
         val prep = HiraCtcPreprocess.run(bitmap, cfg)
 
@@ -71,34 +67,19 @@ class HiraCtcRecognizer(
         val shape = outTensor.shape()
         val data = outTensor.dataAsFloatArray
 
-        val logProbs = extractLogProbsTV(data, shape, prep.validTimeSteps) // [T][V] Double
-        val top = CtcBeamSearch.decodeTopK(
-            logProbs = logProbs,
-            idToChar = { id ->
-                // blank(0) は空でOK
-                if (id == 0) "" else vocab.idToChar(id)
-            },
-            topK = topK,
-            beamWidth = beamWidth,
-            perStepTop = perStepTop
-        )
+        val logProbs = extractLogProbsTV(data, shape, prep.validTimeSteps) // [T][V]
+        val scores = SingleCharCtcScorer.scoreAllSingleChars(logProbs, blankId = 0)
+        val topIds = SingleCharCtcScorer.topKFromScores(scores, topK = topK)
+        val topPct = SingleCharCtcScorer.toPercentsFromTop(topIds, scores)
 
-        val candidates = CtcBeamSearch.toPercents(top)
-            .map { c ->
-                val t = c.text
-                CtcCandidate(text = t, percent = c.percent)
-            }
+        val out = topPct.map { (id, pct) ->
+            val text = if (id == 0) "" else vocab.idToChar(id)
+            CtcCandidate(text = text, percent = pct)
+        }.filter { it.text.isNotEmpty() }
 
-        return candidates.filter { it.text.isNotEmpty() }.ifEmpty { candidates }
+        return if (out.isNotEmpty()) out else listOf(CtcCandidate(text = "", percent = 100.0))
     }
 
-    /**
-     * outTensor の shape を吸収して [T][V] の logProbs を取り出す
-     * shape 優先順位は greedy と同様:
-     *  - [T,1,V]
-     *  - [1,T,V]
-     *  - [T,V]
-     */
     private fun extractLogProbsTV(
         data: FloatArray,
         shape: LongArray,
@@ -114,14 +95,13 @@ class HiraCtcRecognizer(
 
         val T = minOf(tDim, validTimeSteps)
         val V = vDim
-
         val out = Array(T) { DoubleArray(V) }
 
         for (t in 0 until T) {
             for (v in 0 until V) {
                 val idx = when (layout) {
                     "T1V" -> (t * 1 * V) + v
-                    "1TV" -> (0 * tDim * V) + (t * V) + v
+                    "1TV" -> (t * V) + v
                     "TV" -> (t * V) + v
                     else -> 0
                 }
@@ -150,11 +130,10 @@ class HiraCtcRecognizer(
         for (t in 0 until T) {
             var bestIdx = 0
             var bestVal = Float.NEGATIVE_INFINITY
-
             for (v in 0 until vDim) {
                 val idx = when (layout) {
                     "T1V" -> (t * 1 * vDim) + v
-                    "1TV" -> (0 * tDim * vDim) + (t * vDim) + v
+                    "1TV" -> (t * vDim) + v
                     "TV" -> (t * vDim) + v
                     else -> 0
                 }

@@ -35,7 +35,7 @@ class KanaKanjiConverter(
         queryUtf8: String,
         nBest: Int = 10,
         beamWidth: Int = 20,
-        showBunsetsu: Boolean = false,
+        showBunsetsu: Boolean = true,
         yomiMode: Int = 3,
         predK: Int = 1,
         showPred: Boolean = true,

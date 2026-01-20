@@ -37,6 +37,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import timber.log.Timber
 import kotlin.math.max
 import kotlin.math.min
 
@@ -290,6 +291,13 @@ class HiraganaImeService : InputMethodService() {
      */
     private var lastCandKey: String = ""
     private var lastCandidatesKey: String = ""
+
+    // --- Candidate request state (TopRow flicker prevention) ---
+    @Volatile
+    private var candidateRequestInFlight: Boolean = false
+
+    @Volatile
+    private var candidateInFlightKey: String = ""
 
     override fun onCreate() {
         super.onCreate()
@@ -583,11 +591,13 @@ class HiraganaImeService : InputMethodService() {
      * 要件：
      * - Preeditモード かつ composingに文字がある かつ bgに文字がある かつ 候補がある => 候補を表示（topRowは非表示）
      * - Preeditモード かつ composingに文字がある かつ bgが空 かつ ulにのみ文字がある => 何も表示しない（topRowも候補も非表示）
+     * - 候補要求中（loading）で bgに文字がある => 何も表示しない（topRowも候補も非表示）※チラつき防止
      * - それ以外 => topRow表示（候補は非表示）
-     *
-     * ※candidateHostの高さは固定なので下がズレない
      */
-    private fun updateCandidateTopRowVisibility(hasCandidates: Boolean) {
+    private fun updateCandidateTopRowVisibility(
+        hasCandidates: Boolean,
+        isLoading: Boolean = false
+    ) {
         val isPreeditWithText = (inputMode == InputMode.PREEDIT) && composing.isNotEmpty()
 
         val bgEmptyUlOnly =
@@ -596,6 +606,9 @@ class HiraganaImeService : InputMethodService() {
         val showCandidates =
             isPreeditWithText && !bgRange.isEmpty() && hasCandidates
 
+        val loadingWithBg =
+            isPreeditWithText && !bgRange.isEmpty() && isLoading
+
         when {
             showCandidates -> {
                 candidateRecycler?.visibility = View.VISIBLE
@@ -603,6 +616,12 @@ class HiraganaImeService : InputMethodService() {
             }
 
             bgEmptyUlOnly -> {
+                candidateRecycler?.visibility = View.GONE
+                topRow?.visibility = View.GONE
+            }
+
+            loadingWithBg -> {
+                // ★ flicker防止：要求中は何も出さない
                 candidateRecycler?.visibility = View.GONE
                 topRow?.visibility = View.GONE
             }
@@ -678,11 +697,10 @@ class HiraganaImeService : InputMethodService() {
         val results = runCatching {
             kkConverter.convert(
                 queryUtf8 = yomi,
-                nBest = 20,
+                nBest = 4,
                 beamWidth = 20,
                 showBunsetsu = true,
                 yomiMode = 3,
-                predK = 1,
                 showPred = false,
                 showOmit = true,
                 yomiLimit = 200,
@@ -706,17 +724,30 @@ class HiraganaImeService : InputMethodService() {
     private fun requestCandidatesAsync(fullText: String, bgSub: String) {
         // Preedit 以外・空文字は候補なし
         if (inputMode != InputMode.PREEDIT || fullText.isEmpty() || bgSub.isEmpty()) {
+            candidateRequestInFlight = false
+            candidateInFlightKey = ""
+
             lastCandidates = emptyList()
             lastCandKey = ""
             lastCandidatesKey = ""
+
             candidateAdapter?.submit(emptyList())
-            updateCandidateTopRowVisibility(hasCandidates = false)
+            updateCandidateTopRowVisibility(hasCandidates = false, isLoading = false)
             updateActionKeyLabels()
             return
         }
 
         val key = makeCandidateKey(bgSub, fullText.length, cursor)
         lastCandKey = key
+
+        // ★ loading 開始（TopRowのチラつき防止）
+        candidateRequestInFlight = true
+        candidateInFlightKey = key
+        // 今この瞬間に候補が“確定済みで存在する”なら hasCandidates=true だが、
+        // 通常は false のため「loadingWithBg」で topRow を出さないようにする。
+        val hasReadyNow = (lastCandidatesKey == key) && lastCandidates.isNotEmpty()
+        updateCandidateTopRowVisibility(hasCandidates = hasReadyNow, isLoading = true)
+        updateActionKeyLabels()
 
         candJob?.cancel()
         candJob = serviceScope.launch(Dispatchers.Default) {
@@ -728,11 +759,16 @@ class HiraganaImeService : InputMethodService() {
                 if (inputMode != InputMode.PREEDIT) return@withContext
                 if (composing.toString() != fullText) return@withContext
 
+                // ★ loading 終了
+                candidateRequestInFlight = false
+                candidateInFlightKey = ""
+
                 lastCandidates = list
                 lastCandidatesKey = key
                 candidateAdapter?.submit(list)
+                Timber.d("requestCandidatesAsync: $list")
 
-                // CandidateMode 整合性
+                // CandidateMode 整合性（CandidateMode中に候補を作り直さない設計だが保険）
                 if (inCandidateMode) {
                     if (list.isEmpty() || bgRange.isEmpty()) {
                         inCandidateMode = false
@@ -746,7 +782,10 @@ class HiraganaImeService : InputMethodService() {
                     }
                 }
 
-                updateCandidateTopRowVisibility(hasCandidates = list.isNotEmpty())
+                updateCandidateTopRowVisibility(
+                    hasCandidates = list.isNotEmpty(),
+                    isLoading = false
+                )
                 updateActionKeyLabels()
             }
         }
@@ -1176,12 +1215,15 @@ class HiraganaImeService : InputMethodService() {
             candidatePreviewBaseText = null
             candidatePreviewBaseCursor = 0
 
+            candidateRequestInFlight = false
+            candidateInFlightKey = ""
+
             lastCandidates = emptyList()
             lastCandKey = ""
             lastCandidatesKey = ""
 
             candidateAdapter?.submit(emptyList())
-            updateCandidateTopRowVisibility(hasCandidates = false)
+            updateCandidateTopRowVisibility(hasCandidates = false, isLoading = false)
             updateActionKeyLabels()
             setStatus("Preedit: empty")
             return
@@ -1192,18 +1234,32 @@ class HiraganaImeService : InputMethodService() {
 
         updateDecorRangesForRender(len)
 
-        // bgSub を抽出して候補を非同期要求（表示は async が持つ）
         val bgSub = extractBgSubstring(text)
-        requestCandidatesAsync(fullText = text, bgSub = bgSub)
 
-        // 現時点で「候補が確定しているか」をキーで判断
+        // ★ CandidateMode中は候補要求しない（候補を固定して“選んだ変換結果の候補”を出さない）
+        if (!inCandidateMode) {
+            requestCandidatesAsync(fullText = text, bgSub = bgSub)
+        }
+
         val keyNow = if (bgSub.isNotEmpty()) makeCandidateKey(bgSub, len, cursor) else ""
-        val hasCandidatesNow =
-            keyNow.isNotEmpty() && (lastCandidatesKey == keyNow) && lastCandidates.isNotEmpty()
 
-        // CandidateMode維持の整合性（候補未確定の間は勝手に入らない / 既存選択は保持）
+        val isLoadingNow =
+            (!inCandidateMode) && candidateRequestInFlight && (candidateInFlightKey == keyNow)
+
+        val hasCandidatesNow =
+            (!inCandidateMode) &&
+                    keyNow.isNotEmpty() &&
+                    (lastCandidatesKey == keyNow) &&
+                    lastCandidates.isNotEmpty()
+
+        // CandidateMode中は候補表示を維持（enterCandidateModeの時点で候補ありを保証している）
+        val effectiveHasCandidates =
+            if (inCandidateMode) lastCandidates.isNotEmpty() else hasCandidatesNow
+        val effectiveLoading = if (inCandidateMode) false else isLoadingNow
+
+        // CandidateMode維持の整合性
         if (inCandidateMode) {
-            if (!hasCandidatesNow || bgRange.isEmpty()) {
+            if (lastCandidates.isEmpty() || bgRange.isEmpty()) {
                 inCandidateMode = false
                 candidatePreviewBaseText = null
                 candidatePreviewBaseCursor = 0
@@ -1215,7 +1271,10 @@ class HiraganaImeService : InputMethodService() {
             }
         }
 
-        updateCandidateTopRowVisibility(hasCandidates = hasCandidatesNow)
+        updateCandidateTopRowVisibility(
+            hasCandidates = effectiveHasCandidates,
+            isLoading = effectiveLoading
+        )
         updateActionKeyLabels()
 
         val spannable = buildComposingSpannable(text, bgRange, ulRange)
@@ -1238,7 +1297,7 @@ class HiraganaImeService : InputMethodService() {
         }
 
         setStatus(
-            "Preedit: \"$text\" (cursor=$cursor, bg=[${bgRange.start},${bgRange.endExclusive}), ul=[${ulRange.start},${ulRange.endExclusive}), candMode=$inCandidateMode)"
+            "Preedit: \"$text\" (cursor=$cursor, bg=[${bgRange.start},${bgRange.endExclusive}), ul=[${ulRange.start},${ulRange.endExclusive}), candMode=$inCandidateMode, loading=$effectiveLoading)"
         )
     }
 

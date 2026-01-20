@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <item
+        android:bottom="2dp"
+        android:left="8dp"
+        android:right="2dp"
+        android:top="8dp">
+        <shape>
+            <corners android:radius="18dp" />
+            <solid android:color="@color/clay_shadow" />
+            <alpha android:alpha="0.18" />
+        </shape>
+    </item>
+
+    <item
+        android:bottom="8dp"
+        android:left="2dp"
+        android:right="8dp"
+        android:top="2dp">
+        <shape>
+            <corners android:radius="18dp" />
+            <solid android:color="@color/clay_highlight" />
+            <alpha android:alpha="0.40" />
+        </shape>
+    </item>
+
+    <item>
+        <shape>
+            <solid android:color="@color/clay_surface" />
+        </shape>
+    </item>
+
+</layer-list>

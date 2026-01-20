@@ -13,6 +13,7 @@ import android.view.MotionEvent
 import android.view.View
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.withTranslation
+import com.kazumaproject.hiraganahandwritekeyboard.R
 import kotlin.math.abs
 
 class DrawingView @JvmOverloads constructor(
@@ -62,7 +63,7 @@ class DrawingView @JvmOverloads constructor(
     }
 
     private val paintTemplate = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.BLACK
+        color = context.getColor(R.color.ink_color)
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
@@ -80,7 +81,7 @@ class DrawingView @JvmOverloads constructor(
     private var guideGridStepPx: Int = 0
 
     private val guidePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(70, 0, 0, 0)
+        color = context.getColor(R.color.ink_color)
         style = Paint.Style.STROKE
         strokeWidth = 2f
     }
@@ -264,6 +265,10 @@ class DrawingView @JvmOverloads constructor(
         return super.onTouchEvent(event)
     }
 
+    /**
+     * 推論入力の安定化のため、export 時は「常に黒インク」で書き出す。
+     * UIのインク色/背景色に影響されない。
+     */
     fun exportStrokesBitmapTransparent(borderPx: Int = 0): Bitmap {
         val w0 = width.coerceAtLeast(1)
         val h0 = height.coerceAtLeast(1)
@@ -277,19 +282,27 @@ class DrawingView @JvmOverloads constructor(
 
         canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
 
+        // ★ export 用Paint（常に黒）
+        fun exportPaint(strokeWidth: Float): Paint {
+            return Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.BLACK
+                style = Paint.Style.STROKE
+                strokeCap = Paint.Cap.ROUND
+                strokeJoin = Paint.Join.ROUND
+                this.strokeWidth = strokeWidth.coerceAtLeast(1f)
+            }
+        }
+
         canvas.withTranslation(b.toFloat(), b.toFloat()) {
             // export にはガイドは描かない
             for (s in strokes) {
-                val p = Paint(paintTemplate).apply { strokeWidth = s.strokeWidthPx }
-                drawPath(s.path, p)
+                drawPath(s.path, exportPaint(s.strokeWidthPx))
             }
 
             val cp = currentPath
             if (cp != null) {
-                val p = Paint(paintTemplate).apply { strokeWidth = currentStrokeWidthPx }
-                drawPath(cp, p)
+                drawPath(cp, exportPaint(currentStrokeWidthPx))
             }
-
         }
         return bmp
     }
