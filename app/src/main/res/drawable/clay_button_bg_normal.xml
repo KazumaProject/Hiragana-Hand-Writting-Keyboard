@@ -31,7 +31,7 @@
     <item>
         <shape>
             <corners android:radius="14dp" />
-            <solid android:color="@color/clay_surface" />
+            <solid android:color="@color/clay_button_surface" />
         </shape>
     </item>
 

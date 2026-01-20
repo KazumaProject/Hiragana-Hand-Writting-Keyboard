@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import androidx.core.graphics.scale
 import kotlin.math.roundToInt
+import androidx.core.graphics.createBitmap
 
 data class PreprocessConfig(
     val targetH: Int = 32,
@@ -36,7 +37,7 @@ object HiraCtcPreprocess {
         // 白背景 32x512 キャンバスに貼る（学習の分布に寄せる）
         val H = cfg.targetH
         val W = cfg.maxW
-        val canvasBmp = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888)
+        val canvasBmp = createBitmap(W, H)
         canvasBmp.eraseColor(Color.WHITE)
 
         val pasteMargin = cfg.minPasteMarginPx.coerceAtLeast(0)
@@ -63,7 +64,9 @@ object HiraCtcPreprocess {
 
         // valid_w を「最終キャンバス」から推定（Pythonと整合）
         val validW = estimateValidWidthFromWhiteBg(canvasBmp, cfg.inkThresh)
-        val tValid = maxOf(1, validW / 4)
+        //val tValid = maxOf(1, validW / 4)
+        /** モデル変更に伴い 2 に変更。 **/
+        val tValid = maxOf(1, validW / 2)
 
         // float [0,1]（white=1.0, black=0.0）に変換
         val outFloats = toWhiteBlackFloat01(canvasBmp)

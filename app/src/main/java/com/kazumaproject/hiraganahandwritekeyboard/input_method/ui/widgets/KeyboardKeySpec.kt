@@ -1,8 +1,11 @@
+// app/src/main/java/com/kazumaproject/hiraganahandwritekeyboard/input_method/ui/widgets/KeyboardKeySpec.kt
 package com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.widgets
 
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
+import androidx.annotation.ColorRes
+import androidx.annotation.DrawableRes
 import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.ImeController
 
 enum class KeyboardKeyGesture {
@@ -30,6 +33,16 @@ sealed class KeyboardKeySpec {
     /** リピート間隔 */
     abstract val repeatIntervalMs: Long
 
+    /**
+     * RowsView が生成する Button の見た目。
+     * - backgroundResId: 例) あなたの layer-list drawable
+     * - textColorResId: 例) @color/clay_text を使う（要求により resId で管理）
+     */
+    data class ButtonStyle(
+        @DrawableRes val backgroundResId: Int? = null,
+        @ColorRes val textColorResId: Int? = null
+    )
+
     data class ButtonKey(
         override val keyId: String,
         val text: String,
@@ -48,7 +61,10 @@ sealed class KeyboardKeySpec {
         override val enableGestures: Boolean = true,
         override val repeatOnLongPress: Boolean = true,
         override val repeatIntervalMs: Long = 60L,
-        override val flickThresholdDp: Int = 18
+        override val flickThresholdDp: Int = 18,
+
+        // ★追加：このキーだけ見た目を上書きしたい場合（nullなら RowsView のデフォルト）
+        val style: ButtonStyle? = null
     ) : KeyboardKeySpec()
 
     data class CustomViewKey(

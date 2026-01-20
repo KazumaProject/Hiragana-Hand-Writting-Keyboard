@@ -7,13 +7,14 @@ import android.view.ViewGroup
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import com.kazumaproject.hiraganahandwritekeyboard.R
+import com.kazumaproject.kana_kanji_converter.NativeCandidate
 import kotlin.math.roundToInt
 
 class CandidateAdapter(
-    private val onClick: (String) -> Unit
+    private val onClick: (NativeCandidate) -> Unit
 ) : RecyclerView.Adapter<CandidateAdapter.VH>() {
 
-    private val items = mutableListOf<String>()
+    private val items = mutableListOf<NativeCandidate>()
     private var selectedIndex: Int = -1
 
     /**
@@ -21,7 +22,7 @@ class CandidateAdapter(
      * - 「候補表示＝自動選択」はしない（selectedIndex は基本 -1 のまま）
      * - CandidateMode に入った瞬間にだけ setSelectedIndex(0) する
      */
-    fun submit(newItems: List<String>) {
+    fun submit(newItems: List<NativeCandidate>) {
         items.clear()
         items.addAll(newItems)
 
@@ -34,7 +35,7 @@ class CandidateAdapter(
         notifyDataSetChanged()
     }
 
-    fun indexOf(value: String): Int = items.indexOf(value)
+    fun indexOfSurface(surface: String): Int = items.indexOfFirst { it.surface == surface }
 
     fun getSelectedIndex(): Int = selectedIndex
 
@@ -45,7 +46,7 @@ class CandidateAdapter(
         notifyDataSetChanged()
     }
 
-    fun getSelected(): String? {
+    fun getSelected(): NativeCandidate? {
         return if (selectedIndex in items.indices) items[selectedIndex] else null
     }
 
@@ -96,16 +97,17 @@ class CandidateAdapter(
 
     class VH(
         private val tv: TextView,
-        private val onClick: (String) -> Unit
+        private val onClick: (NativeCandidate) -> Unit
     ) : RecyclerView.ViewHolder(tv) {
-        fun bind(text: String, isSelected: Boolean) {
-            tv.text = text
+
+        fun bind(item: NativeCandidate, isSelected: Boolean) {
+            tv.text = item.surface
             if (isSelected) {
                 tv.setBackgroundColor(Color.argb(80, 59, 130, 246))
             } else {
                 tv.setBackgroundColor(Color.argb(35, 0, 0, 0))
             }
-            tv.setOnClickListener { onClick(text) }
+            tv.setOnClickListener { onClick(item) }
         }
     }
 

@@ -7,6 +7,8 @@
     <color name="clay_bg">#0F141B</color>
     <color name="clay_surface">#151C25</color>
 
+    <color name="clay_button_surface">#2d2d30</color>
+
     <!-- Highlights / Shadows -->
     <color name="clay_highlight">#2A3442</color>
     <color name="clay_shadow">#06080B</color>

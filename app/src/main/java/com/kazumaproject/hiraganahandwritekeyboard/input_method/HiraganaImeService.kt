@@ -31,6 +31,7 @@ import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.adapters.Cand
 import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.keyboard_plugins.HandwriteKeyboardPlugin
 import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.keyboard_plugins.NumberKeyboardPlugin
 import com.kazumaproject.kana_kanji_converter.KanaKanjiConverter
+import com.kazumaproject.kana_kanji_converter.NativeCandidate
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -118,7 +119,9 @@ class HiraganaImeService : InputMethodService() {
 
     // Candidate Mode (Preedit のサブ状態)
     private var inCandidateMode: Boolean = false
-    private var lastCandidates: List<String> = emptyList()
+
+    // ★ NativeCandidate に変更
+    private var lastCandidates: List<NativeCandidate> = emptyList()
 
     // CandidateMode プレビュー用（未確定のまま置換するための「元」）
     private var candidatePreviewBaseText: String? = null
@@ -259,6 +262,7 @@ class HiraganaImeService : InputMethodService() {
                 }
 
                 KeyboardAction.Noop -> Unit
+
                 is KeyboardAction.MoveCursorVertical -> {
                     if (inputMode == InputMode.PREEDIT && inCandidateMode) {
                         exitCandidateMode(restorePreview = true, renderAfter = false)
@@ -418,8 +422,7 @@ class HiraganaImeService : InputMethodService() {
         currentKeyboardId =
             prefs.getString(KEY_KEYBOARD_ID, registry.all().first().id) ?: registry.all().first().id
 
-        // タブUIはモードがTABSのときだけ構築しても良いが、
-        // 初期化として一度作っておけばモード切替時にすぐ表示できる
+        // タブUIはモードがTABSのときだけ構築しても良いが、初期化として一度作る
         buildKeyboardTypeTabs()
 
         // selector mode init (default: TOPROW)
@@ -568,7 +571,6 @@ class HiraganaImeService : InputMethodService() {
         if (keyboardSelectorMode != KeyboardSelectorMode.TOPROW) return
 
         val p = registry.getOrDefault(currentKeyboardId)
-        // 例: "Handwrite" / "Number"
         btn.text = p.displayName
     }
 
@@ -621,7 +623,6 @@ class HiraganaImeService : InputMethodService() {
             }
 
             loadingWithBg -> {
-                // ★ flicker防止：要求中は何も出さない
                 candidateRecycler?.visibility = View.GONE
                 topRow?.visibility = View.GONE
             }
@@ -649,9 +650,11 @@ class HiraganaImeService : InputMethodService() {
             onClick = { candidate ->
                 notifyPluginCandidateAdapterClicked()
                 if (inputMode != InputMode.PREEDIT) return@CandidateAdapter
-                // Candidateモード中のタップは「その候補を選択してプレビュー」→ Enterと同じで確定したければEnter
+
                 if (inCandidateMode) {
-                    candidateAdapter?.setSelectedIndex(candidateAdapter?.indexOf(candidate) ?: 0)
+                    // ★ CandidateAdapter に indexOf(candidate) は無いので surface ベースで探す
+                    val idx = candidateAdapter?.indexOfSurface(candidate.surface) ?: 0
+                    candidateAdapter?.setSelectedIndex(if (idx >= 0) idx else 0)
                     previewSelectedCandidateIfNeeded()
                 } else {
                     applyCandidateAndCarryUnderline(candidate)
@@ -659,7 +662,6 @@ class HiraganaImeService : InputMethodService() {
             }
         )
         rv.adapter = candidateAdapter
-
         rv.visibility = View.GONE
     }
 
@@ -688,7 +690,7 @@ class HiraganaImeService : InputMethodService() {
      * 変換候補は「かな漢字変換結果のみ」。
      * 以前入っていた「ひらがな/カタカナ候補」は要件により廃止。
      */
-    private fun computeCandidatesForBgSync(bgSub: String): List<String> {
+    private fun computeCandidatesForBgSync(bgSub: String): List<NativeCandidate> {
         if (bgSub.isBlank()) return emptyList()
         if (!kkReady) return emptyList()
 
@@ -708,12 +710,15 @@ class HiraganaImeService : InputMethodService() {
             )
         }.getOrNull() ?: return emptyList()
 
-        val out = LinkedHashSet<String>(results.size)
+        // dedup: surface ベース（必要なら yomi/score も含めて調整）
+        val out = ArrayList<NativeCandidate>(results.size)
+        val seen = HashSet<String>(results.size)
         for (c in results) {
             val s = c.surface
-            if (!s.isNullOrBlank()) out.add(s)
+            if (s.isNullOrBlank()) continue
+            if (seen.add(s)) out.add(c)
         }
-        return out.toList()
+        return out
     }
 
     /**
@@ -743,8 +748,7 @@ class HiraganaImeService : InputMethodService() {
         // ★ loading 開始（TopRowのチラつき防止）
         candidateRequestInFlight = true
         candidateInFlightKey = key
-        // 今この瞬間に候補が“確定済みで存在する”なら hasCandidates=true だが、
-        // 通常は false のため「loadingWithBg」で topRow を出さないようにする。
+
         val hasReadyNow = (lastCandidatesKey == key) && lastCandidates.isNotEmpty()
         updateCandidateTopRowVisibility(hasCandidates = hasReadyNow, isLoading = true)
         updateActionKeyLabels()
@@ -791,12 +795,44 @@ class HiraganaImeService : InputMethodService() {
         }
     }
 
+    // ---------------- ここが今回の本質（prefixだけ変換する） ----------------
+
+    /**
+     * bgRange の「先頭何文字」を置換対象にするか決める。
+     * - bgText をひらがな化したものが candYomi で startsWith するなら、その長さ分だけを対象にする
+     * - 合わない場合は bg 全体を対象にする（安全フォールバック）
+     */
+    private fun decideBgPrefixEndExclusive(
+        fullText: String,
+        bg: SpanRange,
+        cand: NativeCandidate
+    ): Int {
+        if (bg.isEmpty()) return bg.endExclusive
+
+        val bgText = try {
+            fullText.substring(bg.start, bg.endExclusive)
+        } catch (_: Throwable) {
+            return bg.endExclusive
+        }
+
+        val candYomi = toHiragana(cand.yomi).trim()
+        if (candYomi.isEmpty()) return bg.endExclusive
+
+        val hiraBg = toHiragana(bgText)
+
+        return if (hiraBg.startsWith(candYomi) && candYomi.length <= bgText.length) {
+            bg.start + candYomi.length
+        } else {
+            bg.endExclusive
+        }
+    }
+
     /**
      * 候補タップ:
-     * 1) bgRange 部分を candidate で置換
-     * 2) 置換後、ulRange に文字が残るなら「ul側を次のPreedit」として残す（= bg側は確定）
+     * - bgRange 全体ではなく「candidate.yomi 相当のprefix だけ」を candidate.surface に置換して確定
+     * - 残り（例: 「の」）は次の preedit として残す
      */
-    private fun applyCandidateAndCarryUnderline(candidate: String) {
+    private fun applyCandidateAndCarryUnderline(candidate: NativeCandidate) {
         val ic = currentInputConnection ?: return
         if (composing.isEmpty()) return
 
@@ -805,29 +841,24 @@ class HiraganaImeService : InputMethodService() {
 
         updateDecorRangesForRender(originalLen)
         val bg = bgRange
-        val ul = ulRange
-
         if (bg.isEmpty()) return
 
+        val replaceEndExclusive = decideBgPrefixEndExclusive(originalText, bg, candidate)
+
         val replaced = StringBuilder(originalText).apply {
-            replace(bg.start, bg.endExclusive, candidate)
+            replace(bg.start, replaceEndExclusive, candidate.surface)
         }.toString()
 
-        val delta = candidate.length - (bg.endExclusive - bg.start)
-
-        val newUlStart = clamp(ul.start + delta, 0, replaced.length)
-        val newUlEnd = clamp(ul.endExclusive + delta, 0, replaced.length)
-        val normalizedUl =
-            if (newUlEnd <= newUlStart) SpanRange(0, 0) else SpanRange(newUlStart, newUlEnd)
-
-        val commitEndExclusive = clamp(bg.endExclusive + delta, 0, replaced.length)
+        // 確定するのは「候補surfaceの末尾まで」
+        val commitEndExclusive = clamp(bg.start + candidate.surface.length, 0, replaced.length)
         val commitPart = replaced.substring(0, commitEndExclusive)
 
-        val nextPreedit =
-            if (!normalizedUl.isEmpty()) replaced.substring(
-                normalizedUl.start,
-                normalizedUl.endExclusive
-            ) else ""
+        // 残りは次の preedit
+        val nextPreedit = if (commitEndExclusive < replaced.length) {
+            replaced.substring(commitEndExclusive)
+        } else {
+            ""
+        }
 
         ic.beginBatchEdit()
 
@@ -836,7 +867,6 @@ class HiraganaImeService : InputMethodService() {
 
         composing.setLength(0)
         composing.append(nextPreedit)
-
         cursor = composing.length
 
         inCandidateMode = false
@@ -941,7 +971,6 @@ class HiraganaImeService : InputMethodService() {
     }
 
     private fun updateKeyboardUiState() {
-        // タブモードのときだけ、タブUIを更新
         for ((id, btn) in tabButtons) {
             val selected = (id == currentKeyboardId)
             btn.isEnabled = !prefs.getBoolean(KEY_RESIZE_MODE, false)
@@ -1007,7 +1036,6 @@ class HiraganaImeService : InputMethodService() {
         if (inCandidateMode) return false
         if (bgRange.isEmpty()) return false
 
-        // 「今の composing/cursor/bgSub に対する候補が確定して存在している」場合のみ true
         val keyNow = currentCandidateKeyForNow(composing.toString())
         return keyNow.isNotEmpty() && (lastCandidatesKey == keyNow) && lastCandidates.isNotEmpty()
     }
@@ -1017,23 +1045,18 @@ class HiraganaImeService : InputMethodService() {
         if (composing.isEmpty()) return
         if (bgRange.isEmpty()) return
 
-        // 候補が今のキーに紐付いていることを保証
         val keyNow = currentCandidateKeyForNow(composing.toString())
         if (keyNow.isEmpty() || lastCandidatesKey != keyNow || lastCandidates.isEmpty()) return
 
-        // ここで初めて「選択状態」にする
         inCandidateMode = true
 
-        // プレビュー用の元を確保（CandidateMode開始時の状態）
         candidatePreviewBaseText = composing.toString()
         candidatePreviewBaseCursor = cursor
 
         candidateAdapter?.setSelectedIndex(0)
         updateActionKeyLabels()
 
-        // 選択候補に合わせて未確定置換（プレビュー）
         previewSelectedCandidateIfNeeded()
-
         setStatus("CandidateMode: selected=0")
     }
 
@@ -1067,7 +1090,6 @@ class HiraganaImeService : InputMethodService() {
         val idx = candidateAdapter?.moveNextWrap() ?: -1
         updateActionKeyLabels()
 
-        // 選択候補に合わせて未確定置換（プレビュー更新）
         previewSelectedCandidateIfNeeded()
 
         if (idx >= 0) setStatus("CandidateMode: selected=$idx")
@@ -1077,19 +1099,16 @@ class HiraganaImeService : InputMethodService() {
         if (!inCandidateMode) return
 
         val selected = candidateAdapter?.getSelected()
-        if (selected.isNullOrEmpty()) {
+        if (selected == null) {
             exitCandidateMode(restorePreview = true, renderAfter = true)
             return
         }
 
-        // 確定するので、プレビュー元は不要
         candidatePreviewBaseText = null
         candidatePreviewBaseCursor = 0
 
-        // 既にプレビューで置換済みでも、replaceはno-opになり得るのでそのままでOK
         applyCandidateAndCarryUnderline(selected)
 
-        // 保険
         inCandidateMode = false
         candidateAdapter?.setSelectedIndex(-1)
         updateActionKeyLabels()
@@ -1098,14 +1117,13 @@ class HiraganaImeService : InputMethodService() {
     /**
      * CandidateMode中：selectedIndex に合わせて bg 部分を「未確定のまま」置換して表示する。
      * - 置換の基準は CandidateMode開始時の composing（candidatePreviewBaseText）
-     * - Backspace で CandidateModeを抜けたら base に戻す
+     * - 置換は bg 全体ではなく「selected.yomi の prefix 分だけ」
      */
     private fun previewSelectedCandidateIfNeeded() {
         if (!inCandidateMode) return
         val base = candidatePreviewBaseText ?: return
         val selected = candidateAdapter?.getSelected() ?: return
 
-        // base状態のレンジを一旦算出
         val baseLen = base.length
         val baseCursor = clamp(candidatePreviewBaseCursor, 0, baseLen)
 
@@ -1121,25 +1139,25 @@ class HiraganaImeService : InputMethodService() {
 
         val bg = bgRange
         if (bg.isEmpty()) {
-            // あり得るが、成立しないので元に戻す
             composing.setLength(0)
             composing.append(prevText)
             cursor = prevCursor
             return
         }
 
+        val replaceEndExclusive = decideBgPrefixEndExclusive(base, bg, selected)
+
         val replaced = StringBuilder(base).apply {
-            replace(bg.start, bg.endExclusive, selected)
+            replace(bg.start, replaceEndExclusive, selected.surface)
         }.toString()
 
-        val delta = selected.length - (bg.endExclusive - bg.start)
-        val newCursor = clamp(baseCursor + delta, 0, replaced.length)
+        // プレビュー中のカーソルは「surface直後」に置く（変換境界が分かりやすい）
+        val newCursor = clamp(bg.start + selected.surface.length, 0, replaced.length)
 
         composing.setLength(0)
         composing.append(replaced)
         cursor = newCursor
 
-        // プレビュー後の描画（候補一覧は維持しつつ、選択だけ反映）
         renderComposing()
     }
 
@@ -1236,7 +1254,7 @@ class HiraganaImeService : InputMethodService() {
 
         val bgSub = extractBgSubstring(text)
 
-        // ★ CandidateMode中は候補要求しない（候補を固定して“選んだ変換結果の候補”を出さない）
+        // ★ CandidateMode中は候補要求しない
         if (!inCandidateMode) {
             requestCandidatesAsync(fullText = text, bgSub = bgSub)
         }
@@ -1252,7 +1270,6 @@ class HiraganaImeService : InputMethodService() {
                     (lastCandidatesKey == keyNow) &&
                     lastCandidates.isNotEmpty()
 
-        // CandidateMode中は候補表示を維持（enterCandidateModeの時点で候補ありを保証している）
         val effectiveHasCandidates =
             if (inCandidateMode) lastCandidates.isNotEmpty() else hasCandidatesNow
         val effectiveLoading = if (inCandidateMode) false else isLoadingNow
