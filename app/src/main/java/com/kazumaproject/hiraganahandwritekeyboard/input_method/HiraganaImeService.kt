@@ -1,6 +1,7 @@
 package com.kazumaproject.hiraganahandwritekeyboard.input_method
 
 import android.content.SharedPreferences
+import android.content.res.Configuration
 import android.graphics.Color
 import android.inputmethodservice.InputMethodService
 import android.text.SpannableString
@@ -483,6 +484,20 @@ class HiraganaImeService : InputMethodService() {
         currentPlugin?.onDestroy()
     }
 
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+
+        // root を作り直す運用なら（あなたが「コードに変えた」側の想定）
+        val newRoot = onCreateInputView()
+        setInputView(newRoot)
+
+        // 重要：新しい keyboardContainer は空なので、必ず再生成
+        selectKeyboard(currentKeyboardId, savePref = false, forceRecreate = true)
+
+        // ついでにサイズ制約も再適用（回転後の画面サイズで clamp される）
+        applySavedPanelSize()
+    }
+
     /**
      * imeStatusText の表示/非表示を「プログラム内でのみ」切り替えるためのAPI。
      */
@@ -645,22 +660,41 @@ class HiraganaImeService : InputMethodService() {
     private fun setupCandidatesRecycler() {
         val rv = candidateRecycler ?: return
 
-        rv.layoutManager = LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)
+        val lm = LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)
+        rv.layoutManager = lm
+
+        fun scrollToIndexIfNeeded(index: Int) {
+            if (index < 0) return
+
+            rv.post {
+                val first = lm.findFirstVisibleItemPosition()
+                val last = lm.findLastVisibleItemPosition()
+
+                // すでに表示されているなら何もしない（無駄なスクロール抑制）
+                if (first >= 0 && last >= 0 && index in first..last) return@post
+
+                rv.smoothScrollToPosition(index)
+            }
+        }
+
         candidateAdapter = CandidateAdapter(
             onClick = { candidate ->
                 notifyPluginCandidateAdapterClicked()
                 if (inputMode != InputMode.PREEDIT) return@CandidateAdapter
 
                 if (inCandidateMode) {
-                    // ★ CandidateAdapter に indexOf(candidate) は無いので surface ベースで探す
                     val idx = candidateAdapter?.indexOfSurface(candidate.surface) ?: 0
                     candidateAdapter?.setSelectedIndex(if (idx >= 0) idx else 0)
                     previewSelectedCandidateIfNeeded()
                 } else {
                     applyCandidateAndCarryUnderline(candidate)
                 }
+            },
+            onSelectedIndexChanged = { idx ->
+                scrollToIndexIfNeeded(idx)
             }
         )
+
         rv.adapter = candidateAdapter
         rv.visibility = View.GONE
     }
@@ -770,6 +804,7 @@ class HiraganaImeService : InputMethodService() {
                 lastCandidates = list
                 lastCandidatesKey = key
                 candidateAdapter?.submit(list)
+                candidateRecycler?.scrollToPosition(0)
                 Timber.d("requestCandidatesAsync: $list")
 
                 // CandidateMode 整合性（CandidateMode中に候補を作り直さない設計だが保険）
@@ -940,11 +975,14 @@ class HiraganaImeService : InputMethodService() {
         }
     }
 
-    private fun selectKeyboard(id: String, savePref: Boolean) {
+    private fun selectKeyboard(id: String, savePref: Boolean, forceRecreate: Boolean = false) {
         val container = keyboardContainer ?: return
         val newPlugin = registry.getOrDefault(id)
 
-        if (currentKeyboardId == newPlugin.id && currentPlugin != null) {
+        val containerHasView = container.childCount > 0
+        val sameKeyboard = (currentKeyboardId == newPlugin.id && currentPlugin != null)
+
+        if (!forceRecreate && sameKeyboard && containerHasView) {
             updateKeyboardUiState()
             updateTopRowToggleLabel()
             updateActionKeyLabels()

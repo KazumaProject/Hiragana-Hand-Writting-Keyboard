@@ -10,9 +10,9 @@
     android:includeFontPadding="false"
     android:maxLines="1"
     android:minHeight="36dp"
-    android:paddingStart="12dp"
+    android:paddingStart="32dp"
     android:paddingTop="6dp"
-    android:paddingEnd="12dp"
+    android:paddingEnd="32dp"
     android:paddingBottom="6dp"
     android:textColor="@color/clay_text"
     android:textSize="16sp" />

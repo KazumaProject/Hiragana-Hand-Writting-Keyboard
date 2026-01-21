@@ -1,4 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <dimen name="handwrite_candidate_bar_height">48dp</dimen>
+
+    <dimen name="handwrite_root_padding_land">4dp</dimen>
+    <dimen name="handwrite_dual_margin_land">4dp</dimen>
+    <dimen name="handwrite_dual_min_height_land">140dp</dimen>
+
+    <dimen name="handwrite_side_width_land">56dp</dimen>
+    <dimen name="handwrite_bottom_min_height_land">44dp</dimen>
+
+    <dimen name="handwrite_dual_min_height">220dp</dimen>
 </resources>

@@ -4,24 +4,24 @@
     android:id="@+id/handwriteRoot"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:padding="8dp">
+    android:padding="@dimen/handwrite_root_padding_land">
 
     <com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui.DualDrawingComposerView
         android:id="@+id/dualDrawing"
         android:layout_width="0dp"
         android:layout_height="0dp"
-        android:layout_margin="8dp"
-        android:minHeight="@dimen/handwrite_dual_min_height"
+        android:layout_margin="@dimen/handwrite_dual_margin_land"
+        android:minHeight="@dimen/handwrite_dual_min_height_land"
         app:layout_constraintBottom_toTopOf="@id/keyRowsBottom"
         app:layout_constraintEnd_toStartOf="@id/keyRowsRight"
         app:layout_constraintStart_toEndOf="@id/keyRowsLeft"
-        app:layout_constraintTop_toTopOf="parent" />
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintVertical_chainStyle="spread" />
 
     <com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.widgets.KeyboardKeyRowsView
         android:id="@+id/keyRowsLeft"
-        android:layout_width="64dp"
+        android:layout_width="@dimen/handwrite_side_width_land"
         android:layout_height="0dp"
-        android:layout_marginBottom="@dimen/handwrite_candidate_bar_height"
         android:gravity="top"
         android:paddingTop="0dp"
         android:paddingBottom="0dp"
@@ -31,9 +31,8 @@
 
     <com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.widgets.KeyboardKeyRowsView
         android:id="@+id/keyRowsRight"
-        android:layout_width="64dp"
+        android:layout_width="@dimen/handwrite_side_width_land"
         android:layout_height="0dp"
-        android:layout_marginBottom="@dimen/handwrite_candidate_bar_height"
         android:gravity="top"
         android:paddingTop="0dp"
         android:paddingBottom="0dp"
@@ -45,6 +44,7 @@
         android:id="@+id/keyRowsBottom"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
+        android:minHeight="@dimen/handwrite_bottom_min_height_land"
         android:paddingTop="0dp"
         android:paddingBottom="0dp"
         app:layout_constraintBottom_toBottomOf="parent"

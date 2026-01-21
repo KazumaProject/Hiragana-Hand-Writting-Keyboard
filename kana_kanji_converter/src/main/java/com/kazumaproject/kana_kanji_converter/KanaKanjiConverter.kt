@@ -38,13 +38,13 @@ class KanaKanjiConverter(
         showBunsetsu: Boolean = true,
         yomiMode: Int = 3,
         predK: Int = 1,
-        showPred: Boolean = true,
+        showPred: Boolean = false,
         showOmit: Boolean = true,
         predLenPenalty: Int = 200,
         yomiLimit: Int = 200,
         finalLimit: Int = 50,
-        dedup: Boolean = true,
-        globalDedup: Boolean = true
+        dedup: Boolean = false,
+        globalDedup: Boolean = false
     ): Array<NativeCandidate> {
         if (!initialized) {
             throw IllegalStateException("KanaKanjiConverter is not initialized. Call init(context) first.")

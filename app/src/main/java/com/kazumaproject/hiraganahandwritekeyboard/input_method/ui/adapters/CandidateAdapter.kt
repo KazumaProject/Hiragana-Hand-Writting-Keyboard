@@ -11,7 +11,8 @@ import com.kazumaproject.kana_kanji_converter.NativeCandidate
 import kotlin.math.roundToInt
 
 class CandidateAdapter(
-    private val onClick: (NativeCandidate) -> Unit
+    private val onClick: (NativeCandidate) -> Unit,
+    private val onSelectedIndexChanged: ((Int) -> Unit)? = null,
 ) : RecyclerView.Adapter<CandidateAdapter.VH>() {
 
     private val items = mutableListOf<NativeCandidate>()
@@ -23,6 +24,8 @@ class CandidateAdapter(
      * - CandidateMode に入った瞬間にだけ setSelectedIndex(0) する
      */
     fun submit(newItems: List<NativeCandidate>) {
+        val oldSelected = selectedIndex
+
         items.clear()
         items.addAll(newItems)
 
@@ -33,6 +36,11 @@ class CandidateAdapter(
         }
 
         notifyDataSetChanged()
+
+        // 選択が維持されている場合のみ（=-1は除外）、必要ならスクロール
+        if (selectedIndex >= 0 && selectedIndex != oldSelected) {
+            onSelectedIndexChanged?.invoke(selectedIndex)
+        }
     }
 
     fun indexOfSurface(surface: String): Int = items.indexOfFirst { it.surface == surface }
@@ -40,10 +48,16 @@ class CandidateAdapter(
     fun getSelectedIndex(): Int = selectedIndex
 
     fun setSelectedIndex(index: Int) {
+        val oldSelected = selectedIndex
         val newIdx = if (index in items.indices) index else -1
-        if (newIdx == selectedIndex) return
+        if (newIdx == oldSelected) return
+
         selectedIndex = newIdx
         notifyDataSetChanged()
+
+        if (selectedIndex >= 0) {
+            onSelectedIndexChanged?.invoke(selectedIndex)
+        }
     }
 
     fun getSelected(): NativeCandidate? {
@@ -51,14 +65,21 @@ class CandidateAdapter(
     }
 
     fun moveNextWrap(): Int {
+        val oldSelected = selectedIndex
+
         if (items.isEmpty()) {
             selectedIndex = -1
             notifyDataSetChanged()
             return -1
         }
+
         val next = if (selectedIndex !in items.indices) 0 else (selectedIndex + 1) % items.size
         selectedIndex = next
         notifyDataSetChanged()
+
+        if (selectedIndex >= 0 && selectedIndex != oldSelected) {
+            onSelectedIndexChanged?.invoke(selectedIndex)
+        }
         return next
     }
 
