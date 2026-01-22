@@ -3,6 +3,18 @@ plugins {
     alias(libs.plugins.kotlin.android)
 }
 
+def localProps = new Properties()
+def localPropsFile = rootProject.file("local.properties")
+if (localPropsFile.exists()) {
+    localPropsFile.withInputStream { localProps.load(it) }
+}
+
+def ks = localProps.getProperty("KEYSTORE_FILE")
+def ksp = localProps.getProperty("KEYSTORE_PASSWORD")
+def ka = localProps.getProperty("KEY_ALIAS")
+def kp = localProps.getProperty("KEY_PASSWORD")
+def hasReleaseSigning = (ks && ksp && ka && kp)
+
 android {
     namespace 'com.kazumaproject.hiraganahandwritekeyboard'
     compileSdk 36
@@ -16,8 +28,21 @@ android {
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
+        // arm64 only（ここだけでOK。splits は使わない）
         ndk {
             abiFilters.add("arm64-v8a")
+        }
+    }
+
+    signingConfigs {
+        release {
+            // ローカルでもCIでも「署名情報がある場合のみ」設定する
+            if (hasReleaseSigning) {
+                storeFile file(ks)
+                storePassword ksp
+                keyAlias ka
+                keyPassword kp
+            }
         }
     }
 
@@ -28,10 +53,15 @@ android {
 
     buildTypes {
         release {
+            // 署名情報が揃っているときだけ release 署名を適用（CI向け）
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_11
         targetCompatibility JavaVersion.VERSION_11
@@ -42,13 +72,13 @@ android {
 }
 
 dependencies {
-
     implementation libs.androidx.core.ktx
     implementation libs.androidx.appcompat
     implementation libs.material
     implementation libs.androidx.activity
     implementation libs.androidx.constraintlayout
     implementation project(':kana_kanji_converter')
+
     testImplementation libs.junit
     androidTestImplementation libs.androidx.junit
     androidTestImplementation libs.androidx.espresso.core
@@ -56,6 +86,5 @@ dependencies {
     implementation(files("libs/pytorch_android-release.aar"))
     implementation libs.nativeloader
     implementation libs.fbjni.java.only
-
     implementation(libs.timber)
 }
