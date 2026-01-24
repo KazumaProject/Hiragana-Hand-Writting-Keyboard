@@ -24,6 +24,7 @@ import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.KeyboardPlugi
 import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.widgets.CursorNavView
 import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.widgets.KeyboardKeyRowsView
 import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.widgets.KeyboardKeySpec
+import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.widgets.UndoRedoView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -67,6 +68,9 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
     private var keyRowsLeftRef: KeyboardKeyRowsView? = null
     private var keyRowsRightRef: KeyboardKeyRowsView? = null
     private var keyRowsBottomRef: KeyboardKeyRowsView? = null
+
+    // ---- UndoRedoView ref (enable/disable update) ----
+    private var undoRedoViewRef: UndoRedoView? = null
 
     // ---- keep last view/controller for immediate reconfigure ----
     private var lastDualRef: DualDrawingComposerView? = null
@@ -142,7 +146,7 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             "つ" to listOf("っ"),
             "わ" to listOf("ゎ"),
 
-            // 濁点例（あなたの要望）
+            // 濁点例
             "か" to listOf("が"),
             "き" to listOf("ぎ"),
             "く" to listOf("ぐ"),
@@ -157,11 +161,11 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
 
             "た" to listOf("だ"),
             "ち" to listOf("ぢ"),
-            "つ" to listOf("づ", "っ"), // 例: つ->づ と小つ(っ)も欲しい場合
+            "つ" to listOf("づ", "っ"),
             "て" to listOf("で"),
             "と" to listOf("ど"),
 
-            // 半濁点（あなたの要望: は->ば,ぱ）
+            // 半濁点
             "は" to listOf("ば", "ぱ"),
             "ひ" to listOf("び", "ぴ"),
             "ふ" to listOf("ぶ", "ぷ"),
@@ -204,7 +208,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
                 keyMinHeightDp = computedKeyMinHeightDp
             )
 
-            // mode を変えた直後に、現在の drawing 高さに合わせて再計算も走らせる
             dual.post {
                 recalcKeyHeightsAndRebuild(
                     rootView = dual,
@@ -215,6 +218,7 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
                     bottomRows = bottom,
                     mode = mode
                 )
+                updateUndoRedoEnabled(dual)
             }
         }
     }
@@ -291,6 +295,8 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             activePreviewLen = 0
             genA++
             genB++
+
+            updateUndoRedoEnabled(dual)
         }
         dual.candidateList.layoutManager =
             LinearLayoutManager(parent.context, LinearLayoutManager.HORIZONTAL, false)
@@ -320,7 +326,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         )
 
         // ---- 重要：IMEパネルのリサイズ等で高さが変わるたびに、DrawingView高さからキー高さを再計算 ----
-        // 監視対象は「DrawingView(A)」(候補バー48dpを含まない純粋な描画領域) とする
         keyRowsLayoutListener?.let { l ->
             dual.viewA.removeOnLayoutChangeListener(l)
         }
@@ -336,6 +341,7 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
                     bottomRows = bottomRows,
                     mode = HandwriteUiConfig.keyRowsMode
                 )
+                updateUndoRedoEnabled(dual)
             }
         }
         dual.viewA.addOnLayoutChangeListener(keyRowsLayoutListener)
@@ -351,8 +357,14 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
                 bottomRows = bottomRows,
                 mode = mode
             )
+            updateUndoRedoEnabled(dual)
         }
 
+        // --- Undo/Redo enabled 更新フック（active側の canUndo/canRedo を反映）---
+        dual.viewA.onHistoryChanged = { updateUndoRedoEnabled(dual) }
+        dual.viewB.onHistoryChanged = { updateUndoRedoEnabled(dual) }
+
+        // stroke開始時：activeSide切替 + 相手側クリア + 候補クリア
         dual.onStrokeStarted = { side ->
             if (side != activeSide) {
                 // activeSide 切替時は「置換枠」をリセットし、候補をクリア
@@ -369,12 +381,20 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
                 cancelInferJobFor(prev)
 
                 activeSide = side
+
+                // 切替後のUndo/Redo状態を反映
+                updateUndoRedoEnabled(dual)
             }
         }
 
+        // stroke確定時：推論
         dual.onStrokeCommitted = { side ->
             scheduleInferReplaceAndShowCandidates(dual, side, controller)
+            updateUndoRedoEnabled(dual)
         }
+
+        // 初期反映
+        dual.post { updateUndoRedoEnabled(dual) }
 
         return v
     }
@@ -398,6 +418,7 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         lastDualRef = null
         lastControllerRef = null
         adapter = null
+        undoRedoViewRef = null
     }
 
     override fun onHostEvent(event: HostEvent) {
@@ -410,6 +431,7 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
 
     private fun resetInkAndCandidates() {
         val dual = lastDualRef ?: return
+        val controller = lastControllerRef
 
         // ink をクリア
         dual.clearBoth()
@@ -426,6 +448,13 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
 
         // 推論ジョブも止めておくのが安全
         cancelInferJobs()
+
+        // preedit末尾の置換中テキストも消したい場合（要件次第）
+        if (controller != null) {
+            clearActivePreviewFromIme(controller)
+        }
+
+        updateUndoRedoEnabled(dual)
     }
 
     // ---------------- dynamic recalc ----------------
@@ -492,6 +521,8 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         leftRows.requestLayout()
         rightRows.requestLayout()
         bottomRows?.requestLayout()
+
+        updateUndoRedoEnabled(dual)
     }
 
     // ---------------- key rows building ----------------
@@ -505,6 +536,33 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         controller: ImeController,
         keyMinHeightDp: Int
     ) {
+        fun undoRedoKey() = KeyboardKeySpec.CustomViewKey(
+            keyId = "undo_redo",
+            minHeightDp = keyMinHeightDp,
+            createView = { ctx, _parent, _c ->
+                UndoRedoView(ctx).apply {
+                    layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    )
+                    setIconTextSizeSp(10f)
+
+                    // 参照保持（enabled更新に使う）
+                    undoRedoViewRef = this
+
+                    setListener(object : UndoRedoView.Listener {
+                        override fun onUndo() {
+                            onUndoRedoPressed(dual, controller, isUndo = true)
+                        }
+
+                        override fun onRedo() {
+                            onUndoRedoPressed(dual, controller, isUndo = false)
+                        }
+                    })
+                }
+            }
+        )
+
         fun clearKey() = KeyboardKeySpec.ButtonKey(
             keyId = "clear",
             text = "\uD83E\uDDF9",
@@ -524,6 +582,8 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
                 activePreviewLen = 0
                 genA++
                 genB++
+
+                updateUndoRedoEnabled(dual)
             },
             repeatOnLongPress = false
         )
@@ -561,6 +621,8 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
                                     activePreviewLen = 0
                                     genA++
                                     genB++
+
+                                    updateUndoRedoEnabled(dual)
                                 }
 
                                 CursorNavView.Action.FLICK_UP,
@@ -574,6 +636,8 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
                                     activePreviewLen = 0
                                     genA++
                                     genB++
+
+                                    updateUndoRedoEnabled(dual)
                                 }
 
                                 CursorNavView.Action.FLICK_DOWN,
@@ -587,6 +651,8 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
                                     activePreviewLen = 0
                                     genA++
                                     genB++
+
+                                    updateUndoRedoEnabled(dual)
                                 }
                             }
                         }
@@ -612,6 +678,8 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
                 activePreviewLen = 0
                 genA++
                 genB++
+
+                updateUndoRedoEnabled(dual)
             },
             repeatOnLongPress = true,
             repeatIntervalMs = 60L,
@@ -645,11 +713,15 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
                 activePreviewLen = 0
                 genA++
                 genB++
+
+                updateUndoRedoEnabled(dual)
             },
             repeatOnLongPress = false
         )
 
+        // RIGHT_ONLY / LEFT_ONLY で使う縦キー（Undo/Redo を最上段に含める）
         val allKeysVertical = listOf(
+            listOf(undoRedoKey()),
             listOf(backspaceKey()),
             listOf(cursorNavKey()),
             listOf(spaceKey()),
@@ -665,7 +737,12 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             )
         )
 
-        val leftOnly = listOf(listOf(clearKey()))
+        // ★あなたの要件：delete(=clear) の上に Undo/Redo を追加（左列）
+        val leftOnly = listOf(
+            listOf(undoRedoKey()),
+            listOf(clearKey())
+        )
+
         val rightOnly = listOf(
             listOf(backspaceKey()),
             listOf(spaceKey()),
@@ -716,6 +793,56 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         }
     }
 
+    // ---------------- Undo/Redo action ----------------
+
+    private fun onUndoRedoPressed(
+        dual: DualDrawingComposerView,
+        controller: ImeController,
+        isUndo: Boolean
+    ) {
+        val dv = if (activeSide == DualDrawingComposerView.Side.A) dual.viewA else dual.viewB
+
+        if (isUndo) {
+            dv.undo()
+        } else {
+            dv.redo()
+        }
+
+        // Undo/Redo 後の enabled を即時反映
+        updateUndoRedoEnabled(dual)
+
+        // インクが空になったら候補・置換をクリア
+        if (!dv.hasInk()) {
+            submitCandidates(emptyList())
+            clearActivePreviewFromIme(controller)
+            activePreviewLen = 0
+            genA++
+            genB++
+            return
+        }
+
+        // インクがある場合は推論を回して候補/プレビュー末尾を更新
+        scheduleInferReplaceAndShowCandidates(dual, activeSide, controller)
+    }
+
+    private fun updateUndoRedoEnabled(dual: DualDrawingComposerView) {
+        val dv = if (activeSide == DualDrawingComposerView.Side.A) dual.viewA else dual.viewB
+        undoRedoViewRef?.setEnabledState(
+            canUndo = dv.canUndo(),
+            canRedo = dv.canRedo()
+        )
+    }
+
+    private fun clearActivePreviewFromIme(controller: ImeController) {
+        if (!controller.isPreedit) {
+            activePreviewLen = 0
+            return
+        }
+        val n = activePreviewLen.coerceAtLeast(0)
+        repeat(n) { controller.dispatch(KeyboardAction.Backspace) }
+        activePreviewLen = 0
+    }
+
     // ---------------- candidate tap ----------------
 
     private fun onCandidateTapped(
@@ -755,6 +882,7 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             if (!dv.hasInk()) {
                 // 1リストなので、activeSide のときだけクリア（非activeなら触らない）
                 if (side == activeSide) submitCandidates(emptyList())
+                if (side == activeSide) updateUndoRedoEnabled(dual)
                 return@launch
             }
 
@@ -787,6 +915,8 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             if (top1.isBlank()) return@launch
 
             applyReplaceTailToIme(controller, top1)
+
+            updateUndoRedoEnabled(dual)
         }
 
         if (side == DualDrawingComposerView.Side.A) inferJobA = newJob else inferJobB = newJob
@@ -827,8 +957,7 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             val variants = map[base.text].orEmpty()
             if (variants.isEmpty()) continue
 
-            // 派生候補は元候補より少し percent を下げる（同格に見えないように）
-            // さらに複数ある場合は、後ろほどわずかに下げる
+            // 派生候補は元候補より少し percent を下げる
             variants.forEachIndexed { idx, v ->
                 val penalty = (factor - idx * 0.02).coerceIn(0.0, 1.0)
                 val derived = base.copy(

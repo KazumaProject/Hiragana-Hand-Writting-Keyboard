@@ -26,7 +26,7 @@ class CtcCandidateAdapter(
         fun bind(item: CtcCandidate) {
             // 例: "あ" のように表示
             val pct = item.percent.roundToInt().coerceIn(0, 100)
-            txt.text = if (pct > 0) item.text else item.text
+            txt.text = item.text
         }
     }
 
