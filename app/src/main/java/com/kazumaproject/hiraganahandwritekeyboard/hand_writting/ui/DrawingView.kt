@@ -9,14 +9,19 @@ import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PorterDuff
+import android.graphics.Rect
+import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.withTranslation
 import com.kazumaproject.hiraganahandwritekeyboard.R
+import com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui.utils.BitmapPreprocessor
 import com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui.utils.MultiCharSegmenter
 import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
 
 class DrawingView @JvmOverloads constructor(
     context: Context,
@@ -25,7 +30,8 @@ class DrawingView @JvmOverloads constructor(
 
     data class Stroke(
         val path: Path,
-        val strokeWidthPx: Float
+        val strokeWidthPx: Float,
+        val bounds: RectF
     )
 
     private val strokes = ArrayList<Stroke>()
@@ -63,6 +69,7 @@ class DrawingView @JvmOverloads constructor(
         changeCounter++
         onHistoryChanged?.invoke()
         recomputeSegmentationGuideIfNeeded(force = false)
+        recomputeEstimatedCharWidthGuideIfNeeded(force = false)
     }
 
     private val paintTemplate = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -122,12 +129,9 @@ class DrawingView @JvmOverloads constructor(
         invalidate()
     }
 
-    // ---------------- Auto Segmentation Guide ----------------
+    // ---------------- Auto Segmentation Guide (optional) ----------------
 
-    /**
-     * MultiCharSegmenter と一致する「区切り線」を表示する
-     */
-    private var guideSegmentationEnabled: Boolean = true
+    private var guideSegmentationEnabled: Boolean = false
 
     private val guideSegPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = context.getColor(R.color.ink_color)
@@ -140,9 +144,6 @@ class DrawingView @JvmOverloads constructor(
     private var guideSegCfg: MultiCharSegmenter.SegmentationConfig =
         MultiCharSegmenter.SegmentationConfig()
 
-    /**
-     * 区切り線（x座標、View座標系）
-     */
     private var guideSegXs: IntArray = intArrayOf()
 
     private var guideSegLastComputedCounter: Long = -1L
@@ -155,25 +156,6 @@ class DrawingView @JvmOverloads constructor(
             guideSegXs = intArrayOf()
         } else {
             recomputeSegmentationGuideIfNeeded(force = true)
-        }
-        invalidate()
-    }
-
-    fun setGuideSegmentationAlpha(alpha: Int) {
-        guideSegPaint.alpha = alpha.coerceIn(0, 255)
-        invalidate()
-    }
-
-    fun setGuideSegmentationStrokeWidthPx(px: Float) {
-        guideSegPaint.strokeWidth = px.coerceAtLeast(1f)
-        invalidate()
-    }
-
-    fun setGuideSegmentationDashed(enabled: Boolean) {
-        guideSegPaint.pathEffect = if (enabled) {
-            DashPathEffect(floatArrayOf(12f, 10f), 0f)
-        } else {
-            null
         }
         invalidate()
     }
@@ -208,7 +190,6 @@ class DrawingView @JvmOverloads constructor(
         val xs = MultiCharSegmenter.estimateSplitLinesPx(white, guideSegCfg)
         runCatching { white.recycle() }
 
-        // 念のため画面外・重複除去
         guideSegXs = xs
             .asSequence()
             .map { it.coerceIn(0, width) }
@@ -231,7 +212,125 @@ class DrawingView @JvmOverloads constructor(
         }
     }
 
-    // ------------------------------------------------
+    // ---------------- Estimated Character Width Guide ----------------
+
+    private var guideEstimatedCharWidthEnabled: Boolean = true
+    private var guideEstimatedCharWidthShowBox: Boolean = true
+
+    private var guideEstimatedCharWidthCfg: MultiCharSegmenter.SegmentationConfig =
+        MultiCharSegmenter.SegmentationConfig()
+
+    private val guideCharWidthLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = context.getColor(R.color.ink_color)
+        style = Paint.Style.STROKE
+        strokeWidth = 2f
+        alpha = 90
+    }
+
+    private val guideCharWidthBoxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = context.getColor(R.color.ink_color)
+        style = Paint.Style.STROKE
+        strokeWidth = 2f
+        alpha = 70
+        pathEffect = DashPathEffect(floatArrayOf(8f, 8f), 0f)
+    }
+
+    private var guideCharInkBounds: Rect? = null
+
+    private var guideCharLastComputedCounter: Long = -1L
+    private var guideCharLastComputedW: Int = -1
+    private var guideCharLastComputedH: Int = -1
+
+    fun setGuideEstimatedCharWidthEnabled(enabled: Boolean) {
+        guideEstimatedCharWidthEnabled = enabled
+        if (!enabled) {
+            guideCharInkBounds = null
+        } else {
+            recomputeEstimatedCharWidthGuideIfNeeded(force = true)
+        }
+        invalidate()
+    }
+
+    fun setGuideEstimatedCharWidthShowBox(enabled: Boolean) {
+        guideEstimatedCharWidthShowBox = enabled
+        invalidate()
+    }
+
+    fun setGuideEstimatedCharWidthAlpha(alpha: Int) {
+        val a = alpha.coerceIn(0, 255)
+        guideCharWidthLinePaint.alpha = a
+        guideCharWidthBoxPaint.alpha = (a * 0.8f).toInt().coerceIn(0, 255)
+        invalidate()
+    }
+
+    fun setGuideEstimatedCharWidthStrokeWidthPx(px: Float) {
+        val w = px.coerceAtLeast(1f)
+        guideCharWidthLinePaint.strokeWidth = w
+        guideCharWidthBoxPaint.strokeWidth = w
+        invalidate()
+    }
+
+    fun setGuideEstimatedCharWidthConfig(cfg: MultiCharSegmenter.SegmentationConfig) {
+        guideEstimatedCharWidthCfg = cfg
+        recomputeEstimatedCharWidthGuideIfNeeded(force = true)
+        invalidate()
+    }
+
+    private fun recomputeEstimatedCharWidthGuideIfNeeded(force: Boolean) {
+        if (!guideEstimatedCharWidthEnabled) return
+
+        if (!hasInk()) {
+            guideCharInkBounds = null
+            guideCharLastComputedCounter = changeCounter
+            guideCharLastComputedW = width
+            guideCharLastComputedH = height
+            return
+        }
+
+        if (width <= 1 || height <= 1) return
+
+        val needs = force ||
+                guideCharLastComputedCounter != changeCounter ||
+                guideCharLastComputedW != width ||
+                guideCharLastComputedH != height
+
+        if (!needs) return
+
+        val white = exportStrokesBitmapWhiteBg(borderPx = 0)
+        val b = BitmapPreprocessor.findInkBounds(white, guideEstimatedCharWidthCfg.inkThresh)
+        runCatching { white.recycle() }
+
+        guideCharInkBounds = b
+
+        guideCharLastComputedCounter = changeCounter
+        guideCharLastComputedW = width
+        guideCharLastComputedH = height
+    }
+
+    private fun drawEstimatedCharWidthGuide(canvas: Canvas) {
+        val b = guideCharInkBounds ?: return
+        if (b.width() <= 0 || b.height() <= 0) return
+
+        val h = height.toFloat()
+
+        val leftX = b.left.toFloat()
+        val rightX = b.right.toFloat()
+
+        canvas.drawLine(leftX, 0f, leftX, h, guideCharWidthLinePaint)
+        canvas.drawLine(rightX, 0f, rightX, h, guideCharWidthLinePaint)
+
+        if (guideEstimatedCharWidthShowBox) {
+            canvas.drawRect(
+                b.left.toFloat(),
+                b.top.toFloat(),
+                b.right.toFloat(),
+                b.bottom.toFloat(),
+                guideCharWidthBoxPaint
+            )
+        }
+    }
+
+    // ---------------- Public API ----------------
 
     fun setStrokeWidthPx(px: Float) {
         currentStrokeWidthPx = px.coerceAtLeast(1f)
@@ -267,21 +366,128 @@ class DrawingView @JvmOverloads constructor(
 
     /**
      * インク（ストローク）が存在するか
-     * - 相手側を確定する条件に使う
      */
     fun hasInk(): Boolean {
         return strokes.isNotEmpty() || currentPath != null
     }
 
+    /**
+     * ★追加: 「最後に検知した1文字（推定）」に属するストロークを削除する。
+     *
+     * 仕様:
+     * - MultiCharSegmenter と同じロジックで、現在の描画を横方向にセグメント化し、
+     *   「最後のセグメント」を最後の1文字と見なす。
+     * - そのセグメントに十分重なるストローク（または中心Xが入るストローク）を削除する。
+     * - 削除が発生した場合、redoStack はクリア（新しい編集で redo を無効化）する。
+     *
+     * 戻り値:
+     * - 何かしら削除できたら true
+     * - 何も削除できなければ false
+     */
+    fun eraseLastEstimatedChar(
+        segCfg: MultiCharSegmenter.SegmentationConfig = MultiCharSegmenter.SegmentationConfig()
+    ): Boolean {
+        if (!hasInk()) return false
+
+        // 描画中のパスは確定前なので、まず確定済みストロークだけで削除を行う（必要なら仕様変更可）
+        if (strokes.isEmpty()) {
+            // currentPath しか無いなら、「最後の1文字」扱いで全クリア
+            clearCanvas()
+            return true
+        }
+
+        val white = exportStrokesBitmapWhiteBg(borderPx = 0)
+        val ranges: List<IntRange> = try {
+            MultiCharSegmenter.estimateCharXRangesPx(white, segCfg)
+        } finally {
+            runCatching { white.recycle() }
+        }
+
+        // 分割が推定できない = 単一文字扱い
+        if (ranges.isEmpty()) {
+            val had = strokes.isNotEmpty()
+            if (!had) return false
+            strokes.clear()
+            redoStack.clear()
+            currentPath = null
+            invalidate()
+            bumpChange()
+            return true
+        }
+
+        val last = ranges.last()
+        val segL = last.first.toFloat()
+        val segR = last.last.toFloat()
+
+        fun overlapRatioX(b: RectF): Float {
+            val l = max(segL, b.left)
+            val r = min(segR, b.right)
+            val ov = max(0f, r - l)
+            val w = max(1f, b.width())
+            return ov / w
+        }
+
+        val before = strokes.size
+
+        // last セグメントに属すると推定できるストロークだけ残す
+        val kept = ArrayList<Stroke>(strokes.size)
+        var removedAny = false
+
+        for (s in strokes) {
+            val b = s.bounds
+            val cx = (b.left + b.right) * 0.5f
+            val inByCenter = (cx >= segL && cx <= segR)
+            val byOverlap = overlapRatioX(b) >= 0.5f
+
+            val remove = inByCenter || byOverlap
+            if (remove) {
+                removedAny = true
+            } else {
+                kept.add(s)
+            }
+        }
+
+        if (!removedAny) {
+            // ヒューリスティックで取れなかった場合の保険：最後のストロークだけ削除
+            // （「最後の1文字」ではない可能性があるが、Backspace の期待動作としてはマシ）
+            if (strokes.isNotEmpty()) {
+                strokes.removeAt(strokes.lastIndex)
+                redoStack.clear()
+                invalidate()
+                bumpChange()
+                return true
+            }
+            return false
+        }
+
+        strokes.clear()
+        strokes.addAll(kept)
+
+        // 新しい編集が入ったので redo は無効化
+        redoStack.clear()
+
+        // currentPath はそのまま（通常 backspace は描画中に押されない想定）
+        invalidate()
+        bumpChange()
+
+        return strokes.size != before
+    }
+
+    // ---------------- Drawing ----------------
+
     @SuppressLint("DrawAllocation")
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
-        // サイズ変化などで必要なら再計算（onDraw で最終保険）
         recomputeSegmentationGuideIfNeeded(force = false)
+        recomputeEstimatedCharWidthGuideIfNeeded(force = false)
 
         if (guideEnabled) {
             drawGuide(canvas)
+        }
+
+        if (guideEstimatedCharWidthEnabled) {
+            drawEstimatedCharWidthGuide(canvas)
         }
 
         if (guideSegmentationEnabled) {
@@ -335,6 +541,7 @@ class DrawingView @JvmOverloads constructor(
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         recomputeSegmentationGuideIfNeeded(force = true)
+        recomputeEstimatedCharWidthGuideIfNeeded(force = true)
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -373,7 +580,11 @@ class DrawingView @JvmOverloads constructor(
                 val cp = currentPath
                 if (cp != null) {
                     cp.lineTo(x, y)
-                    strokes.add(Stroke(cp, currentStrokeWidthPx))
+
+                    val b = RectF()
+                    cp.computeBounds(b, true)
+
+                    strokes.add(Stroke(cp, currentStrokeWidthPx, b))
                     redoStack.clear()
 
                     bumpChange()
@@ -391,7 +602,6 @@ class DrawingView @JvmOverloads constructor(
 
     /**
      * 推論入力の安定化のため、export 時は「常に黒インク」で書き出す。
-     * UIのインク色/背景色に影響されない。
      */
     fun exportStrokesBitmapTransparent(borderPx: Int = 0): Bitmap {
         val w0 = width.coerceAtLeast(1)
@@ -420,6 +630,7 @@ class DrawingView @JvmOverloads constructor(
             for (s in strokes) {
                 drawPath(s.path, exportPaint(s.strokeWidthPx))
             }
+
             val cp = currentPath
             if (cp != null) {
                 drawPath(cp, exportPaint(currentStrokeWidthPx))
@@ -429,7 +640,7 @@ class DrawingView @JvmOverloads constructor(
     }
 
     /**
-     * 分割・前処理用途の「白背景 + 黒インク」のBitmapを書き出す。
+     * 分割・前処理用途の「白背景 + 黒インク」
      */
     fun exportStrokesBitmapWhiteBg(borderPx: Int = 0): Bitmap {
         val w0 = width.coerceAtLeast(1)

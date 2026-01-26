@@ -40,55 +40,39 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
     override val id: String = "handwrite"
     override val displayName: String = "Handwrite"
 
-    // ---- coroutine scope (plugin lifetime) ----
     private val pluginJob: Job = SupervisorJob()
     private val scope: CoroutineScope = CoroutineScope(pluginJob + Dispatchers.Main.immediate)
 
-    // ---- recognizer ----
     private var recognizer: HiraCtcRecognizer? = null
 
-    // ---- debounce jobs per side ----
     private var inferJobA: Job? = null
     private var inferJobB: Job? = null
 
-    // ---- active side ----
     private var activeSide: DualDrawingComposerView.Side = DualDrawingComposerView.Side.A
-
-    // ---- 「置換」対象の末尾スロット長（active side のみ） ----
     private var activePreviewLen: Int = 0
 
-    // ---- generation token（古い推論結果で上書きしない） ----
     private var genA: Long = 0L
     private var genB: Long = 0L
 
-    // ---- candidate adapter (single) ----
     private var adapter: CtcCandidateAdapter? = null
 
-    // ---- keyRows refs (for runtime switching) ----
     private var keyRowsLeftRef: KeyboardKeyRowsView? = null
     private var keyRowsRightRef: KeyboardKeyRowsView? = null
     private var keyRowsBottomRef: KeyboardKeyRowsView? = null
 
-    // ---- UndoRedoView ref (enable/disable update) ----
     private var undoRedoViewRef: UndoRedoView? = null
 
-    // ---- keep last view/controller for immediate reconfigure ----
     private var lastDualRef: DualDrawingComposerView? = null
     private var lastControllerRef: ImeController? = null
 
-    // ---- computed key height ----
-    private var computedKeyMinHeightDp: Int = 40 // 初期値（描画View計測後に上書き）
+    private var computedKeyMinHeightDp: Int = 40
 
-    // ---- dynamic sizing ----
     private var lastDrawingHeightPx: Int = 0
     private var keyRowsLayoutListener: View.OnLayoutChangeListener? = null
 
-    // configureKeyRows() 内で構築した rows の行数を保存（将来キー構成を変えても追従）
     private var rowsCountAllVertical: Int = 4
     private var rowsCountLeftOnly: Int = 1
     private var rowsCountRightOnly: Int = 3
-
-    // ---------------- key rows mode ----------------
 
     enum class KeyRowsMode {
         LEFT_ONLY,
@@ -104,35 +88,17 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         var keyRowsMode: KeyRowsMode = KeyRowsMode.RIGHT_ONLY
     }
 
-    /**
-     * CTC候補の「派生文字」を元候補の直後に差し込む設定。
-     *
-     * 例:
-     *  - "あ" -> "ぁ"
-     *  - "か" -> "が"
-     *  - "は" -> "ば","ぱ"
-     */
     object HandwriteCandidateVariantConfig {
 
         @Volatile
         var enabled: Boolean = true
 
-        /**
-         * 既に候補内に同じ文字が存在する場合、重複を除外するか
-         */
         @Volatile
         var dedupeByText: Boolean = true
 
-        /**
-         * 派生候補の percent を元候補に対してどれくらい下げるか（0.0〜1.0）
-         * 例: 0.90 なら元候補が 80% のとき派生候補は 72% として表示
-         */
         @Volatile
         var variantPercentFactor: Double = 0.90
 
-        /**
-         * 元文字 -> 追加したい派生候補（表示順）
-         */
         val variants: MutableMap<String, List<String>> = linkedMapOf(
             "あ" to listOf("ぁ"),
             "い" to listOf("ぃ"),
@@ -146,7 +112,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             "つ" to listOf("っ"),
             "わ" to listOf("ゎ"),
 
-            // 濁点例
             "か" to listOf("が"),
             "き" to listOf("ぎ"),
             "く" to listOf("ぐ"),
@@ -165,7 +130,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             "て" to listOf("で"),
             "と" to listOf("ど"),
 
-            // 半濁点
             "は" to listOf("ば", "ぱ"),
             "ひ" to listOf("び", "ぴ"),
             "ふ" to listOf("ぶ", "ぷ"),
@@ -285,7 +249,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             )
         }
 
-        // ---- single candidate list ----
         adapter = CtcCandidateAdapter { c ->
             onCandidateTapped(dual, activeSide, c, controller)
             dual.clearBoth()
@@ -313,7 +276,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
 
         val mode = HandwriteUiConfig.keyRowsMode
 
-        // まず初期表示
         applyKeyRowsMode(leftRows, rightRows, bottomRows, mode)
         configureKeyRows(
             mode = mode,
@@ -325,7 +287,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             keyMinHeightDp = computedKeyMinHeightDp
         )
 
-        // ---- 重要：IMEパネルのリサイズ等で高さが変わるたびに、DrawingView高さからキー高さを再計算 ----
         keyRowsLayoutListener?.let { l ->
             dual.viewA.removeOnLayoutChangeListener(l)
         }
@@ -346,7 +307,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         }
         dual.viewA.addOnLayoutChangeListener(keyRowsLayoutListener)
 
-        // 初回も実測後に一発だけ合わせる
         v.post {
             recalcKeyHeightsAndRebuild(
                 rootView = v,
@@ -360,21 +320,16 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             updateUndoRedoEnabled(dual)
         }
 
-        // --- Undo/Redo enabled 更新フック（active側の canUndo/canRedo を反映）---
         dual.viewA.onHistoryChanged = { updateUndoRedoEnabled(dual) }
         dual.viewB.onHistoryChanged = { updateUndoRedoEnabled(dual) }
 
-        // stroke開始時：activeSide切替 + 相手側クリア + 候補クリア
         dual.onStrokeStarted = { side ->
             if (side != activeSide) {
-                // activeSide 切替時は「置換枠」をリセットし、候補をクリア
                 activePreviewLen = 0
 
-                // 前の側のキャンバスはクリア（要件どおり）
                 val prev = activeSide
                 drawingViewFor(dual, prev).clearCanvas()
 
-                // 1つしか候補リストが無いので、切替時はクリア
                 submitCandidates(emptyList())
 
                 bumpGeneration(prev)
@@ -382,18 +337,15 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
 
                 activeSide = side
 
-                // 切替後のUndo/Redo状態を反映
                 updateUndoRedoEnabled(dual)
             }
         }
 
-        // stroke確定時：推論
         dual.onStrokeCommitted = { side ->
             scheduleInferReplaceAndShowCandidates(dual, side, controller)
             updateUndoRedoEnabled(dual)
         }
 
-        // 初期反映
         dual.post { updateUndoRedoEnabled(dual) }
 
         return v
@@ -403,7 +355,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         cancelInferJobs()
         pluginJob.cancel()
 
-        // listener cleanup
         val dual = lastDualRef
         val l = keyRowsLayoutListener
         if (dual != null && l != null) {
@@ -433,31 +384,19 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         val dual = lastDualRef ?: return
         val controller = lastControllerRef
 
-        // ink をクリア
         dual.clearBoth()
-
-        // 候補リストをクリア
         submitCandidates(emptyList())
-
-        // 置換状態をリセット
         activePreviewLen = 0
-
-        // 旧ジョブ結果で上書きされないように世代を進める
         genA++
         genB++
-
-        // 推論ジョブも止めておくのが安全
         cancelInferJobs()
 
-        // preedit末尾の置換中テキストも消したい場合（要件次第）
         if (controller != null) {
             clearActivePreviewFromIme(controller)
         }
 
         updateUndoRedoEnabled(dual)
     }
-
-    // ---------------- dynamic recalc ----------------
 
     private fun recalcKeyHeightsAndRebuild(
         rootView: View,
@@ -468,7 +407,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         bottomRows: KeyboardKeyRowsView?,
         mode: KeyRowsMode
     ) {
-        // DrawingView(A) の「実高さ」を優先（候補バーを含まない）
         val drawingHeightPx = dual.viewA.height
             .takeIf { it > 0 }
             ?: dual.viewA.layoutParams.height.takeIf { it > 0 }
@@ -525,8 +463,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         updateUndoRedoEnabled(dual)
     }
 
-    // ---------------- key rows building ----------------
-
     private fun configureKeyRows(
         mode: KeyRowsMode,
         leftRows: KeyboardKeyRowsView,
@@ -547,7 +483,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
                     )
                     setIconTextSizeSp(10f)
 
-                    // 参照保持（enabled更新に使う）
                     undoRedoViewRef = this
 
                     setListener(object : UndoRedoView.Listener {
@@ -576,7 +511,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
                     activePreviewLen = (activePreviewLen - 1).coerceAtLeast(0)
                 }
 
-                // 1リストなのでここでクリア
                 submitCandidates(emptyList())
 
                 activePreviewLen = 0
@@ -661,24 +595,46 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             }
         )
 
+        // ★ここが主変更: Backspace で「最後の1文字（推定）」を描画から削除 → 再推論
         fun backspaceKey() = KeyboardKeySpec.ButtonKey(
             keyId = "backspace",
             text = "⌫",
             minHeightDp = keyMinHeightDp,
-            onClick = {
-                it.dispatch(KeyboardAction.Backspace)
+            onClick = { c ->
+
+                val dv = drawingViewFor(dual, activeSide)
+
+                // まず描画側で「最後の1文字」を消せるか試す
+                val erased = dv.eraseLastEstimatedChar(segCfg = defaultSegCfg())
+
+                if (erased) {
+                    // 旧推論結果で上書きされないように世代を進めて、現ジョブを止める
+                    bumpGeneration(activeSide)
+                    cancelInferJobFor(activeSide)
+
+                    // 描画が空になったなら、候補とプレビューを消す
+                    if (!dv.hasInk()) {
+                        submitCandidates(emptyList())
+                        clearActivePreviewFromIme(controller)
+                        activePreviewLen = 0
+                        updateUndoRedoEnabled(dual)
+                        return@ButtonKey
+                    }
+
+                    // 残っているなら再推論して候補/プレビュー末尾を更新
+                    scheduleInferReplaceAndShowCandidates(dual, activeSide, controller)
+                    updateUndoRedoEnabled(dual)
+                    return@ButtonKey
+                }
+
+                // 消せない（インク無し等）場合は通常の Backspace として動作
+                c.dispatch(KeyboardAction.Backspace)
                 if (controller.isPreedit && activePreviewLen > 0) {
                     activePreviewLen = (activePreviewLen - 1).coerceAtLeast(0)
                 }
 
-                dual.clearBoth()
-                cancelInferJobs()
+                // 文字入力側だけ変えたので、候補はクリアしておく（従来の安全動作）
                 submitCandidates(emptyList())
-
-                activePreviewLen = 0
-                genA++
-                genB++
-
                 updateUndoRedoEnabled(dual)
             },
             repeatOnLongPress = true,
@@ -719,7 +675,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             repeatOnLongPress = false
         )
 
-        // RIGHT_ONLY / LEFT_ONLY で使う縦キー（Undo/Redo を最上段に含める）
         val allKeysVertical = listOf(
             listOf(undoRedoKey()),
             listOf(backspaceKey()),
@@ -737,7 +692,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             )
         )
 
-        // ★あなたの要件：delete(=clear) の上に Undo/Redo を追加（左列）
         val leftOnly = listOf(
             listOf(undoRedoKey()),
             listOf(clearKey())
@@ -749,7 +703,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             listOf(enterKey())
         )
 
-        // rows の行数を保存（動的高さ計算に使う）
         rowsCountAllVertical = allKeysVertical.size
         rowsCountLeftOnly = leftOnly.size
         rowsCountRightOnly = rightOnly.size
@@ -793,8 +746,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         }
     }
 
-    // ---------------- Undo/Redo action ----------------
-
     private fun onUndoRedoPressed(
         dual: DualDrawingComposerView,
         controller: ImeController,
@@ -808,10 +759,8 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             dv.redo()
         }
 
-        // Undo/Redo 後の enabled を即時反映
         updateUndoRedoEnabled(dual)
 
-        // インクが空になったら候補・置換をクリア
         if (!dv.hasInk()) {
             submitCandidates(emptyList())
             clearActivePreviewFromIme(controller)
@@ -821,7 +770,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             return
         }
 
-        // インクがある場合は推論を回して候補/プレビュー末尾を更新
         scheduleInferReplaceAndShowCandidates(dual, activeSide, controller)
     }
 
@@ -843,8 +791,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         activePreviewLen = 0
     }
 
-    // ---------------- candidate tap ----------------
-
     private fun onCandidateTapped(
         dual: DualDrawingComposerView,
         side: DualDrawingComposerView.Side,
@@ -860,8 +806,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         if (side != activeSide) return
         applyReplaceTailToIme(controller, candidate.text)
     }
-
-    // ---------------- infer + replace tail + show candidates ----------------
 
     private data class MultiInferResult(
         val composedText: String,
@@ -885,24 +829,13 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
 
             val dv = drawingViewFor(dual, side)
             if (!dv.hasInk()) {
-                // 1リストなので、activeSide のときだけクリア（非activeなら触らない）
                 if (side == activeSide) submitCandidates(emptyList())
                 if (side == activeSide) updateUndoRedoEnabled(dual)
                 return@launch
             }
 
-            // ---- export: split into per-char bitmaps on Main ----
-            val segCfg = MultiCharSegmenter.SegmentationConfig(
-                // ここは必要なら設定画面や定数で調整してください
-                segTargetH = 48,
-                minGapPx = 10,
-                thinSegmentWidthPx = 12,
-                mergeGapPx = 6,
-                outPadPx = 6
-            )
-
             val parts: List<Bitmap> = withContext(Dispatchers.Main.immediate) {
-                dv.exportCharBitmaps(segCfg = segCfg)
+                dv.exportCharBitmaps(segCfg = defaultSegCfg())
             }
 
             if (parts.isEmpty()) {
@@ -916,7 +849,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
 
             if (!isLatest(side, token)) return@launch
 
-            // 1リストなので、activeSide の結果だけ表示
             if (side == activeSide) {
                 val shown = expandCandidatesWithVariants(result.displayCandidates)
                 submitCandidates(shown)
@@ -935,19 +867,9 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         if (side == DualDrawingComposerView.Side.A) inferJobA = newJob else inferJobB = newJob
     }
 
-    /**
-     * 複数分割Bitmapを推論して、最終文字列と候補リストを構成する。
-     *
-     * 候補表示ポリシー:
-     * - 分割が1文字なら従来どおり topK を表示
-     * - 分割が2文字以上なら「最後の1文字」だけ topK を表示するが、
-     *   prefix（先頭〜最後の1文字手前）は top1 を固定して候補テキストに付与する
-     *   例: prefix="あ"、最後候補=["い","り"] -> 表示候補=["あい","あり"]
-     */
     private fun runInferTopKMulti(parts: List<Bitmap>, topK: Int): MultiInferResult {
         val all: ArrayList<List<CtcCandidate>> = ArrayList(parts.size)
 
-        // parts はここで必ず recycle する（UI側に返さない）
         for (bmp in parts) {
             val cands = runInferTopK(bmp, topK = topK)
                 .filter { it.text.isNotBlank() && it.percent > 0.0 }
@@ -959,7 +881,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             return MultiInferResult(composedText = "", displayCandidates = emptyList())
         }
 
-        // 1文字の場合は従来通り
         if (all.size == 1) {
             val filtered = all.first()
             val top1 = filtered.firstOrNull()?.text?.trim().orEmpty()
@@ -969,7 +890,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             )
         }
 
-        // prefix: 先頭〜最後-1 を top1 固定で連結
         val prefix = buildString {
             for (i in 0 until (all.size - 1)) {
                 val t = all[i].firstOrNull()?.text?.trim().orEmpty()
@@ -979,7 +899,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         }
 
         if (prefix.isBlank()) {
-            // prefix が作れないなら安全側で候補を出さない（置換もしない）
             return MultiInferResult(composedText = "", displayCandidates = emptyList())
         }
 
@@ -989,8 +908,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         }
 
         val composedTop1 = prefix + lastFiltered.first().text.trim()
-
-        // 表示候補は「最後の文字候補に prefix を付ける」
         val display = lastFiltered.map { it.copy(text = prefix + it.text) }
 
         return MultiInferResult(
@@ -999,15 +916,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         )
     }
 
-    /**
-     * CTC候補を表示用に展開して「派生文字」を元候補の直後に差し込む。
-     *
-     * 例:
-     *  - ["あ","か","は"] -> ["あ","ぁ","か","が","は","ば","ぱ"]
-     *
-     * 複数文字の候補（例: "あい"）にも対応：
-     * - 末尾1文字だけを派生展開し、prefixを保持して "あぃ" 等を作る
-     */
     private fun expandCandidatesWithVariants(original: List<CtcCandidate>): List<CtcCandidate> {
         if (!HandwriteCandidateVariantConfig.enabled) return original
         if (original.isEmpty()) return original
@@ -1020,7 +928,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
 
         val out = ArrayList<CtcCandidate>(original.size * 2)
 
-        // 重複排除（任意）
         val seen =
             if (HandwriteCandidateVariantConfig.dedupeByText) LinkedHashSet<String>() else null
 
@@ -1037,7 +944,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             val baseText = base.text
             if (baseText.isEmpty()) continue
 
-            // 複数文字候補でも末尾1文字を派生させる
             val prefix = if (baseText.length >= 2) baseText.dropLast(1) else ""
             val lastChar = baseText.takeLast(1)
 
@@ -1081,8 +987,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         activePreviewLen = newText.length
     }
 
-    // ---------------- generation helpers ----------------
-
     private fun bumpGeneration(side: DualDrawingComposerView.Side): Long {
         return if (side == DualDrawingComposerView.Side.A) {
             genA += 1
@@ -1097,8 +1001,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         return if (side == DualDrawingComposerView.Side.A) token == genA else token == genB
     }
 
-    // ---------------- config ----------------
-
     object HandwriteCommitConfig {
         @Volatile
         var debounceMs: Long = 120L
@@ -1106,8 +1008,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         @Volatile
         var topK: Int = 6
     }
-
-    // ---------------- view/helpers ----------------
 
     private fun drawingViewFor(
         dual: DualDrawingComposerView,
@@ -1129,7 +1029,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         }
     }
 
-    // 旧方式（全体を1枚で推論）も残しておく：将来のABテストやデバッグ用
     @Suppress("unused")
     private fun exportForInferOnMain(drawingView: DrawingView, strokeWidthPx: Float): Bitmap {
         val border = max(24, (strokeWidthPx * 2.2f).toInt())
@@ -1166,7 +1065,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
                 topK = topK.coerceAtLeast(1),
             )
 
-            // normalized はここで破棄（whiteBmp は呼び出し側が管理）
             runCatching { if (normalized !== whiteBmp) normalized.recycle() }
 
             out
@@ -1181,6 +1079,19 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             dp,
             v.resources.displayMetrics
         ).toInt()
+    }
+
+    /**
+     * 推論・ガイド・backspace で同じ設定を使うための共通 Config
+     */
+    private fun defaultSegCfg(): MultiCharSegmenter.SegmentationConfig {
+        return MultiCharSegmenter.SegmentationConfig(
+            segTargetH = 48,
+            minGapPx = 10,
+            thinSegmentWidthPx = 12,
+            mergeGapPx = 6,
+            outPadPx = 6
+        )
     }
 
     companion object {
