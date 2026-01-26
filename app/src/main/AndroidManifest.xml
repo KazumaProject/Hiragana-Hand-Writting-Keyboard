@@ -23,6 +23,10 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".container_app.LicenseDetailActivity"
+            android:exported="false" />
+
         <!-- ここを追加 -->
         <service
             android:name=".input_method.HiraganaImeService"
