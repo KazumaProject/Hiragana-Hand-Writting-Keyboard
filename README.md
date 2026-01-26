@@ -11,9 +11,9 @@ Android 向けの「ひらがな手書き入力キーボード」プロジェク
 
 ## Demo / Screenshots
 
-- GIF / スクリーンショットを追加推奨（例: `docs/` に置く）
-  - `docs/demo.gif`
-  - `docs/screenshot_01.png`
+<img src="docs/light1.png" width="256px" height="auto"/>
+
+<img src="docs/dark1.png" width="256px" height="auto"/>
 
 ## Requirements
 
@@ -56,21 +56,6 @@ Android Studio で本リポジトリを開き、Gradle Sync を実行してく�
 - `kana_kanji_converter/`
   かな漢字変換（または変換関連）モジュール（連携・実験用）
 
-
-## Architecture (High-level)
-
-典型的には次のような流れになります（あなたの実装に合わせて修正してください）。
-
-1. **Drawing / Stroke Capture**
-   ユーザーの描画入力をストロークとして取得
-2. **Preprocess**
-   正規化（サイズ調整、二値化、トリミング等）
-3. **Recognizer**
-   ひらがな分類（または CTC 等で文字列認識）
-4. **Candidates**
-   上位候補を提示して選択
-5. **Commit to InputConnection**
-   選択結果を IME としてアプリへコミット
 
 ## Third-Party
 
