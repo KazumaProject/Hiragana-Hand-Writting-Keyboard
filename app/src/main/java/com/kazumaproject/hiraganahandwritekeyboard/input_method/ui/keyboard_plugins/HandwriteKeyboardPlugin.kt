@@ -17,6 +17,7 @@ import com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui.DrawingView
 import com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui.DualDrawingComposerView
 import com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui.HiraCtcRecognizer
 import com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui.utils.BitmapPreprocessor
+import com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui.utils.MultiCharSegmenter
 import com.kazumaproject.hiraganahandwritekeyboard.input_method.domain.KeyboardAction
 import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.HostEvent
 import com.kazumaproject.hiraganahandwritekeyboard.input_method.ui.ImeController
@@ -32,7 +33,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import timber.log.Timber
 import kotlin.math.max
 
 class HandwriteKeyboardPlugin : KeyboardPlugin {
@@ -863,6 +863,11 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
 
     // ---------------- infer + replace tail + show candidates ----------------
 
+    private data class MultiInferResult(
+        val composedText: String,
+        val displayCandidates: List<CtcCandidate>
+    )
+
     private fun scheduleInferReplaceAndShowCandidates(
         dual: DualDrawingComposerView,
         side: DualDrawingComposerView.Side,
@@ -886,35 +891,43 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
                 return@launch
             }
 
-            val strokeWidthPx = DEFAULT_STROKE_WIDTH_PX.toFloat().coerceAtLeast(1f)
+            // ---- export: split into per-char bitmaps on Main ----
+            val segCfg = MultiCharSegmenter.SegmentationConfig(
+                // ここは必要なら設定画面や定数で調整してください
+                segTargetH = 48,
+                minGapPx = 10,
+                thinSegmentWidthPx = 12,
+                mergeGapPx = 6,
+                outPadPx = 6
+            )
 
-            val whiteBmp = withContext(Dispatchers.Main.immediate) {
-                exportForInferOnMain(dv, strokeWidthPx)
+            val parts: List<Bitmap> = withContext(Dispatchers.Main.immediate) {
+                dv.exportCharBitmaps(segCfg = segCfg)
             }
 
-            val candidates = withContext(Dispatchers.Default) {
-                runInferTopK(whiteBmp, topK = HandwriteCommitConfig.topK)
+            if (parts.isEmpty()) {
+                if (side == activeSide) submitCandidates(emptyList())
+                return@launch
+            }
+
+            val result = withContext(Dispatchers.Default) {
+                runInferTopKMulti(parts, topK = HandwriteCommitConfig.topK)
             }
 
             if (!isLatest(side, token)) return@launch
 
-            val filtered = candidates.filter { it.text.isNotBlank() && it.percent > 0.0 }
-
-            Timber.d("scheduleInferReplaceAndShowCandidates candidates: $candidates")
-            Timber.d("scheduleInferReplaceAndShowCandidates filtered: $filtered")
-
             // 1リストなので、activeSide の結果だけ表示
             if (side == activeSide) {
-                val shown = expandCandidatesWithVariants(filtered)
+                val shown = expandCandidatesWithVariants(result.displayCandidates)
                 submitCandidates(shown)
             }
 
             if (side != activeSide) return@launch
 
-            val top1 = filtered.firstOrNull()?.text?.trim().orEmpty()
-            if (top1.isBlank()) return@launch
+            val topText = result.composedText.trim()
+            if (topText.isBlank()) return@launch
 
-            applyReplaceTailToIme(controller, top1)
+            applyReplaceTailToIme(controller, topText)
 
             updateUndoRedoEnabled(dual)
         }
@@ -923,10 +936,77 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
     }
 
     /**
+     * 複数分割Bitmapを推論して、最終文字列と候補リストを構成する。
+     *
+     * 候補表示ポリシー:
+     * - 分割が1文字なら従来どおり topK を表示
+     * - 分割が2文字以上なら「最後の1文字」だけ topK を表示するが、
+     *   prefix（先頭〜最後の1文字手前）は top1 を固定して候補テキストに付与する
+     *   例: prefix="あ"、最後候補=["い","り"] -> 表示候補=["あい","あり"]
+     */
+    private fun runInferTopKMulti(parts: List<Bitmap>, topK: Int): MultiInferResult {
+        val all: ArrayList<List<CtcCandidate>> = ArrayList(parts.size)
+
+        // parts はここで必ず recycle する（UI側に返さない）
+        for (bmp in parts) {
+            val cands = runInferTopK(bmp, topK = topK)
+                .filter { it.text.isNotBlank() && it.percent > 0.0 }
+            all.add(cands)
+            runCatching { bmp.recycle() }
+        }
+
+        if (all.isEmpty()) {
+            return MultiInferResult(composedText = "", displayCandidates = emptyList())
+        }
+
+        // 1文字の場合は従来通り
+        if (all.size == 1) {
+            val filtered = all.first()
+            val top1 = filtered.firstOrNull()?.text?.trim().orEmpty()
+            return MultiInferResult(
+                composedText = top1,
+                displayCandidates = filtered
+            )
+        }
+
+        // prefix: 先頭〜最後-1 を top1 固定で連結
+        val prefix = buildString {
+            for (i in 0 until (all.size - 1)) {
+                val t = all[i].firstOrNull()?.text?.trim().orEmpty()
+                if (t.isBlank()) return@buildString
+                append(t)
+            }
+        }
+
+        if (prefix.isBlank()) {
+            // prefix が作れないなら安全側で候補を出さない（置換もしない）
+            return MultiInferResult(composedText = "", displayCandidates = emptyList())
+        }
+
+        val lastFiltered = all.last().filter { it.text.isNotBlank() && it.percent > 0.0 }
+        if (lastFiltered.isEmpty()) {
+            return MultiInferResult(composedText = "", displayCandidates = emptyList())
+        }
+
+        val composedTop1 = prefix + lastFiltered.first().text.trim()
+
+        // 表示候補は「最後の文字候補に prefix を付ける」
+        val display = lastFiltered.map { it.copy(text = prefix + it.text) }
+
+        return MultiInferResult(
+            composedText = composedTop1,
+            displayCandidates = display
+        )
+    }
+
+    /**
      * CTC候補を表示用に展開して「派生文字」を元候補の直後に差し込む。
      *
      * 例:
      *  - ["あ","か","は"] -> ["あ","ぁ","か","が","は","ば","ぱ"]
+     *
+     * 複数文字の候補（例: "あい"）にも対応：
+     * - 末尾1文字だけを派生展開し、prefixを保持して "あぃ" 等を作る
      */
     private fun expandCandidatesWithVariants(original: List<CtcCandidate>): List<CtcCandidate> {
         if (!HandwriteCandidateVariantConfig.enabled) return original
@@ -954,14 +1034,20 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         for (base in original) {
             addCandidate(base)
 
-            val variants = map[base.text].orEmpty()
+            val baseText = base.text
+            if (baseText.isEmpty()) continue
+
+            // 複数文字候補でも末尾1文字を派生させる
+            val prefix = if (baseText.length >= 2) baseText.dropLast(1) else ""
+            val lastChar = baseText.takeLast(1)
+
+            val variants = map[lastChar].orEmpty()
             if (variants.isEmpty()) continue
 
-            // 派生候補は元候補より少し percent を下げる
             variants.forEachIndexed { idx, v ->
                 val penalty = (factor - idx * 0.02).coerceIn(0.0, 1.0)
                 val derived = base.copy(
-                    text = v,
+                    text = prefix + v,
                     percent = (base.percent * penalty).coerceIn(0.0, 100.0)
                 )
                 addCandidate(derived)
@@ -1043,6 +1129,8 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         }
     }
 
+    // 旧方式（全体を1枚で推論）も残しておく：将来のABテストやデバッグ用
+    @Suppress("unused")
     private fun exportForInferOnMain(drawingView: DrawingView, strokeWidthPx: Float): Bitmap {
         val border = max(24, (strokeWidthPx * 2.2f).toInt())
         val strokes = drawingView.exportStrokesBitmapTransparent(borderPx = border)
@@ -1068,12 +1156,20 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
                 minSidePx = 192
             )
 
-            if (normalized.width < 32 || normalized.height < 32) return emptyList()
+            if (normalized.width < 32 || normalized.height < 32) {
+                runCatching { if (normalized !== whiteBmp) normalized.recycle() }
+                return emptyList()
+            }
 
-            r.inferTopK(
+            val out = r.inferTopK(
                 bitmap = normalized,
                 topK = topK.coerceAtLeast(1),
             )
+
+            // normalized はここで破棄（whiteBmp は呼び出し側が管理）
+            runCatching { if (normalized !== whiteBmp) normalized.recycle() }
+
+            out
         } catch (_: Throwable) {
             emptyList()
         }

@@ -14,6 +14,7 @@ import android.view.View
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.withTranslation
 import com.kazumaproject.hiraganahandwritekeyboard.R
+import com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui.utils.MultiCharSegmenter
 import kotlin.math.abs
 
 class DrawingView @JvmOverloads constructor(
@@ -305,5 +306,67 @@ class DrawingView @JvmOverloads constructor(
             }
         }
         return bmp
+    }
+
+    /**
+     * 分割・前処理用途の「白背景 + 黒インク」のBitmapを書き出す。
+     * （透明背景でも動きますが、列投影などの前処理が安定します）
+     */
+    fun exportStrokesBitmapWhiteBg(borderPx: Int = 0): Bitmap {
+        val w0 = width.coerceAtLeast(1)
+        val h0 = height.coerceAtLeast(1)
+
+        val b = borderPx.coerceAtLeast(0)
+        val w = (w0 + b * 2).coerceAtLeast(1)
+        val h = (h0 + b * 2).coerceAtLeast(1)
+
+        val bmp = createBitmap(w, h)
+        val canvas = Canvas(bmp)
+        canvas.drawColor(Color.WHITE)
+
+        fun exportPaint(strokeWidth: Float): Paint {
+            return Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.BLACK
+                style = Paint.Style.STROKE
+                strokeCap = Paint.Cap.ROUND
+                strokeJoin = Paint.Join.ROUND
+                this.strokeWidth = strokeWidth.coerceAtLeast(1f)
+            }
+        }
+
+        canvas.withTranslation(b.toFloat(), b.toFloat()) {
+            for (s in strokes) {
+                drawPath(s.path, exportPaint(s.strokeWidthPx))
+            }
+            val cp = currentPath
+            if (cp != null) {
+                drawPath(cp, exportPaint(currentStrokeWidthPx))
+            }
+        }
+        return bmp
+    }
+
+    /**
+     * DrawingView上の手書きを「複数文字の可能性がある」として分割し、文字ごとのBitmapを返す。
+     *
+     * - 戻りが1要素なら「単一文字扱い」
+     * - 2要素以上なら「複数文字扱い」
+     *
+     * 注意:
+     * - 横書き前提（左→右）です。
+     * - 「い」などの誤分割を抑えるヒューリスティック込みですが、完璧ではありません。
+     */
+    fun exportCharBitmaps(
+        segCfg: MultiCharSegmenter.SegmentationConfig = MultiCharSegmenter.SegmentationConfig()
+    ): List<Bitmap> {
+        if (!hasInk()) return emptyList()
+
+        val white = exportStrokesBitmapWhiteBg(borderPx = 0)
+        val parts = MultiCharSegmenter.splitToCharBitmaps(white, segCfg)
+
+        // white は役目を終えたので破棄（parts は別Bitmapとして生成済）
+        runCatching { white.recycle() }
+
+        return parts
     }
 }
