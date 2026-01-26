@@ -131,7 +131,7 @@ class DrawingView @JvmOverloads constructor(
 
     // ---------------- Auto Segmentation Guide (optional) ----------------
 
-    private var guideSegmentationEnabled: Boolean = false
+    private var guideSegmentationEnabled: Boolean = true
 
     private val guideSegPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = context.getColor(R.color.ink_color)

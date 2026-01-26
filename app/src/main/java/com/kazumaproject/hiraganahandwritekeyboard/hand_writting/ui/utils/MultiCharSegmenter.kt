@@ -16,11 +16,53 @@ object MultiCharSegmenter {
     data class SegmentationConfig(
         val inkThresh: Int = 245,
         val segTargetH: Int = 48,
+
+        /**
+         * 列を「インクあり」とみなすための最小インク画素数
+         */
         val minInkPixelsPerCol: Int = 1,
+
+        /**
+         * ギャップ（空白）がこのpx以上なら「切れ目」と判定
+         */
         val minGapPx: Int = 10,
+
+        /**
+         * ★変更: ここは「結合後」に適用する最小セグメント幅として使う
+         * （"に" の左払い等、結合前の細セグメントを落とさないため）
+         */
         val minSegmentWidthPx: Int = 10,
+
+        /**
+         * ★追加: 結合前の“生”セグメントをノイズとして捨てる最小幅（小さめ推奨）
+         * 1 だと単発ノイズも拾いやすいので 2〜3 が無難。
+         */
+        val minRawSegmentWidthPx: Int = 2,
+
+        /**
+         * 細いセグメント扱いする幅（これ以下は「細い」とみなす）
+         */
         val thinSegmentWidthPx: Int = 12,
+
+        /**
+         * 通常結合するギャップ閾値
+         */
         val mergeGapPx: Int = 6,
+
+        /**
+         * ★追加: 「細いセグメントだから結合する」を許す最大ギャップ
+         * これが無いと、細い文字が混ざった時に別文字まで誤結合しやすい。
+         * "に" の左払い救済が目的なら 24〜40 程度が現実的。
+         */
+        val maxThinMergeGapPx: Int = 40,
+
+        /**
+         * ★追加: 列投影の1次元膨張（dilation）幅
+         * 細線がスケール/アンチエイリアスで欠けるのを救う。
+         * 0: 無効, 1〜2: 推奨。
+         */
+        val colDilatePx: Int = 1,
+
         val outPadPx: Int = 6,
         val maxChars: Int = 12
     )
@@ -43,13 +85,16 @@ object MultiCharSegmenter {
         val segH = cfg.segTargetH.coerceAtLeast(8)
         val segBmp = resizeKeepAspectToHeight(crop, segH)
 
-        val rangesSeg = detectXRangesByProjection(segBmp, cfg)
-        val mergedSeg = mergeRangesHeuristically(rangesSeg, cfg)
+        val rangesSegRaw = detectXRangesByProjection(segBmp, cfg)
+        val mergedSeg = mergeRangesHeuristically(rangesSegRaw, cfg)
 
-        val finalSeg = if (mergedSeg.size <= 1) {
+        // ★ここで初めて「最小幅」を適用（結合後）
+        val mergedSegFiltered = mergedSeg.filter { widthOf(it) >= cfg.minSegmentWidthPx }
+
+        val finalSeg = if (mergedSegFiltered.size <= 1) {
             listOf(IntRange(0, segBmp.width - 1))
         } else {
-            mergedSeg.take(cfg.maxChars)
+            mergedSegFiltered.take(cfg.maxChars)
         }
 
         val scaleX = crop.width.toFloat() / segBmp.width.toFloat()
@@ -70,7 +115,6 @@ object MultiCharSegmenter {
         if (segBmp !== crop) runCatching { segBmp.recycle() }
         runCatching { crop.recycle() }
 
-        if (out.isEmpty()) return emptyList()
         return out
     }
 
@@ -92,13 +136,14 @@ object MultiCharSegmenter {
         val segH = cfg.segTargetH.coerceAtLeast(8)
         val segBmp = resizeKeepAspectToHeight(crop, segH)
 
-        val rangesSeg = detectXRangesByProjection(segBmp, cfg)
-        val mergedSeg = mergeRangesHeuristically(rangesSeg, cfg)
+        val rangesSegRaw = detectXRangesByProjection(segBmp, cfg)
+        val mergedSeg = mergeRangesHeuristically(rangesSegRaw, cfg)
+        val mergedSegFiltered = mergedSeg.filter { widthOf(it) >= cfg.minSegmentWidthPx }
 
-        val finalSeg = if (mergedSeg.size <= 1) {
+        val finalSeg = if (mergedSegFiltered.size <= 1) {
             emptyList()
         } else {
-            mergedSeg.take(cfg.maxChars)
+            mergedSegFiltered.take(cfg.maxChars)
         }
 
         if (finalSeg.size <= 1) {
@@ -140,7 +185,7 @@ object MultiCharSegmenter {
     }
 
     /**
-     * ★追加: 現在の描画を「文字ごとのX範囲(IntRange)」として推定して返す（srcWhiteBg座標系）。
+     * 現在の描画を「文字ごとのX範囲(IntRange)」として推定して返す（srcWhiteBg座標系）。
      *
      * - splitToCharBitmaps() と同じ推定を行い、最終的な各セグメントの [xStart.xEnd] を返す。
      * - 返り値が空の場合は「分割できない（単一文字扱い）」とみなしてよい。
@@ -163,14 +208,15 @@ object MultiCharSegmenter {
         val segH = cfg.segTargetH.coerceAtLeast(8)
         val segBmp = resizeKeepAspectToHeight(crop, segH)
 
-        val rangesSeg = detectXRangesByProjection(segBmp, cfg)
-        val mergedSeg = mergeRangesHeuristically(rangesSeg, cfg)
+        val rangesSegRaw = detectXRangesByProjection(segBmp, cfg)
+        val mergedSeg = mergeRangesHeuristically(rangesSegRaw, cfg)
+        val mergedSegFiltered = mergedSeg.filter { widthOf(it) >= cfg.minSegmentWidthPx }
 
         // 1文字扱いは空で返す（呼び出し側で単一文字として扱う）
-        val finalSeg = if (mergedSeg.size <= 1) {
+        val finalSeg = if (mergedSegFiltered.size <= 1) {
             emptyList()
         } else {
-            mergedSeg.take(cfg.maxChars)
+            mergedSegFiltered.take(cfg.maxChars)
         }
 
         if (finalSeg.size <= 1) {
@@ -242,16 +288,40 @@ object MultiCharSegmenter {
             return gray < cfg.inkThresh
         }
 
-        val inkCol = BooleanArray(w)
+        // 列ごとのインク量
+        val colCount = IntArray(w)
         for (x in 0 until w) {
             var cnt = 0
             for (y in 0 until h) {
-                if (isInk(pixels[y * w + x])) {
-                    cnt++
-                    if (cnt >= cfg.minInkPixelsPerCol) break
-                }
+                if (isInk(pixels[y * w + x])) cnt++
             }
-            inkCol[x] = cnt >= cfg.minInkPixelsPerCol
+            colCount[x] = cnt
+        }
+
+        // 列のインク有無
+        val inkCol0 = BooleanArray(w)
+        val minCnt = cfg.minInkPixelsPerCol.coerceAtLeast(1)
+        for (x in 0 until w) inkCol0[x] = colCount[x] >= minCnt
+
+        // ★1D dilation: 細線の欠落を救う
+        val inkCol = if (cfg.colDilatePx <= 0) {
+            inkCol0
+        } else {
+            val d = cfg.colDilatePx
+            val out = BooleanArray(w)
+            for (x in 0 until w) {
+                var any = false
+                val from = (x - d).coerceAtLeast(0)
+                val to = (x + d).coerceAtMost(w - 1)
+                for (k in from..to) {
+                    if (inkCol0[k]) {
+                        any = true
+                        break
+                    }
+                }
+                out[x] = any
+            }
+            out
         }
 
         val ranges = ArrayList<IntRange>()
@@ -288,7 +358,8 @@ object MultiCharSegmenter {
             }
         }
 
-        return ranges.filter { (it.last - it.first + 1) >= cfg.minSegmentWidthPx }
+        // ★ここでは最小限だけ落とす（結合前に落としすぎない）
+        return ranges.filter { widthOf(it) >= cfg.minRawSegmentWidthPx }
     }
 
     private fun mergeRangesHeuristically(
@@ -301,16 +372,16 @@ object MultiCharSegmenter {
         val out = ArrayList<IntRange>()
         var cur = sorted[0]
 
-        fun width(r: IntRange) = (r.last - r.first + 1)
-
         for (k in 1 until sorted.size) {
             val nxt = sorted[k]
             val gap = nxt.first - cur.last - 1
 
-            val curThin = width(cur) <= cfg.thinSegmentWidthPx
-            val nxtThin = width(nxt) <= cfg.thinSegmentWidthPx
+            val curThin = widthOf(cur) <= cfg.thinSegmentWidthPx
+            val nxtThin = widthOf(nxt) <= cfg.thinSegmentWidthPx
+
             val shouldMerge =
-                gap <= cfg.mergeGapPx || curThin || nxtThin
+                (gap <= cfg.mergeGapPx) ||
+                        ((curThin || nxtThin) && gap <= cfg.maxThinMergeGapPx)
 
             cur = if (shouldMerge) {
                 IntRange(cur.first, max(cur.last, nxt.last))
@@ -322,8 +393,8 @@ object MultiCharSegmenter {
         out.add(cur)
 
         if (out.size == 2) {
-            val w0 = width(out[0])
-            val w1 = width(out[1])
+            val w0 = widthOf(out[0])
+            val w1 = widthOf(out[1])
             if (w0 <= cfg.thinSegmentWidthPx && w1 <= cfg.thinSegmentWidthPx) {
                 return listOf(IntRange(out[0].first, out[1].last))
             }
@@ -331,4 +402,6 @@ object MultiCharSegmenter {
 
         return out
     }
+
+    private fun widthOf(r: IntRange): Int = (r.last - r.first + 1)
 }
