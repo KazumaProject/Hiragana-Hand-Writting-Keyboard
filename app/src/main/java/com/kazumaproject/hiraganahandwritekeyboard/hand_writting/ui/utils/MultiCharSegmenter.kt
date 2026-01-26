@@ -101,10 +101,86 @@ object MultiCharSegmenter {
         if (segBmp !== crop) runCatching { segBmp.recycle() }
         runCatching { crop.recycle() }
 
-        // もし全部が極端に細いなどで壊れていたら安全側で1枚に戻す
         if (out.isEmpty()) return emptyList()
-
         return out
+    }
+
+    /**
+     * UIガイド表示用:
+     * splitToCharBitmaps() と同じロジックで「分割線（x座標）」だけ推定する。
+     *
+     * - 返す x は srcWhiteBg 座標系（0..src.width）です
+     * - 戻りが空なら「区切り無し（単一文字扱い）」です
+     */
+    fun estimateSplitLinesPx(
+        srcWhiteBg: Bitmap,
+        cfg: SegmentationConfig = SegmentationConfig()
+    ): IntArray {
+        val bounds: Rect = BitmapPreprocessor.findInkBounds(srcWhiteBg, cfg.inkThresh)
+            ?: return intArrayOf()
+
+        // インクbbox切り出し
+        val crop = Bitmap.createBitmap(
+            srcWhiteBg,
+            bounds.left,
+            bounds.top,
+            bounds.width().coerceAtLeast(1),
+            bounds.height().coerceAtLeast(1)
+        )
+
+        val segH = cfg.segTargetH.coerceAtLeast(8)
+        val segBmp = resizeKeepAspectToHeight(crop, segH)
+
+        val rangesSeg = detectXRangesByProjection(segBmp, cfg)
+        val mergedSeg = mergeRangesHeuristically(rangesSeg, cfg)
+
+        val finalSeg = if (mergedSeg.size <= 1) {
+            // 単一文字扱い -> 分割線は無し
+            emptyList()
+        } else {
+            mergedSeg.take(cfg.maxChars)
+        }
+
+        if (finalSeg.size <= 1) {
+            if (segBmp !== crop) runCatching { segBmp.recycle() }
+            runCatching { crop.recycle() }
+            return intArrayOf()
+        }
+
+        // seg座標 -> crop座標へ（splitToCharBitmapsと同じ変換）
+        val scaleX = crop.width.toFloat() / segBmp.width.toFloat()
+        val pad = cfg.outPadPx.coerceAtLeast(0)
+
+        // 各セグメントの [lx, rx) を crop 座標で作る
+        data class Seg(val lx: Int, val rx: Int)
+
+        val segs = ArrayList<Seg>(finalSeg.size)
+
+        for (r in finalSeg) {
+            val x0 = floor(r.first * scaleX).toInt()
+            val x1 = ceil((r.last + 1) * scaleX).toInt() // last inclusive -> +1
+
+            val lx = (x0 - pad).coerceIn(0, crop.width)
+            val rx = (x1 + pad).coerceIn(0, crop.width)
+            val w = (rx - lx).coerceAtLeast(1)
+            segs.add(Seg(lx, (lx + w).coerceAtMost(crop.width)))
+        }
+
+        // 分割線: 隣接セグメント境界の中点
+        val lines = IntArray(segs.size - 1)
+        for (i in 0 until segs.size - 1) {
+            val leftEnd = segs[i].rx
+            val rightStart = segs[i + 1].lx
+            val cutInCrop = ((leftEnd + rightStart) / 2).coerceIn(0, crop.width)
+            val cutInSrc = (bounds.left + cutInCrop).coerceIn(0, srcWhiteBg.width)
+            lines[i] = cutInSrc
+        }
+
+        if (segBmp !== crop) runCatching { segBmp.recycle() }
+        runCatching { crop.recycle() }
+
+        // 近すぎる線（同一点）を除去（念のため）
+        return lines.distinct().sorted().toIntArray()
     }
 
     private fun resizeKeepAspectToHeight(bmp: Bitmap, targetH: Int): Bitmap {

@@ -59,6 +59,9 @@ class HiraganaImeService : InputMethodService() {
         // キーボード切替UIモード（デフォルト: toprow）
         private const val KEY_KEYBOARD_SELECTOR_MODE =
             "keyboard_selector_mode" // "toprow" or "tabs"
+
+        private const val KEY_PANEL_W_LAND = "panel_width_px_land"
+        private const val KEY_PANEL_H_LAND = "panel_height_px_land"
     }
 
     private enum class InputMode { DIRECT, PREEDIT }
@@ -1556,8 +1559,10 @@ class HiraganaImeService : InputMethodService() {
         val p = panel ?: return
         val b = getPanelBoundsPx()
 
-        val savedW = prefs.getInt(KEY_PANEL_W, -1)
-        val savedH = prefs.getInt(KEY_PANEL_H, -1)
+        val keys = currentPanelSizeKeys()
+
+        val savedW = prefs.getInt(keys.wKey, -1)
+        val savedH = prefs.getInt(keys.hKey, -1)
 
         val defaultW = clamp((resources.displayMetrics.widthPixels * 0.95f).toInt(), b.minW, b.maxW)
         val defaultH = clamp(dpToPx(360f), b.minH, b.maxH)
@@ -1588,9 +1593,10 @@ class HiraganaImeService : InputMethodService() {
     }
 
     private fun savePanelSize(w: Int, h: Int) {
+        val keys = currentPanelSizeKeys()
         prefs.edit()
-            .putInt(KEY_PANEL_W, w)
-            .putInt(KEY_PANEL_H, h)
+            .putInt(keys.wKey, w)
+            .putInt(keys.hKey, h)
             .apply()
     }
 
@@ -1603,4 +1609,20 @@ class HiraganaImeService : InputMethodService() {
             resources.displayMetrics
         ).toInt()
     }
+
+    private fun isLandscapeNow(): Boolean {
+        return resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+    }
+
+    private data class PanelSizeKeys(val wKey: String, val hKey: String)
+
+    private fun currentPanelSizeKeys(): PanelSizeKeys {
+        return if (isLandscapeNow()) {
+            PanelSizeKeys(KEY_PANEL_W_LAND, KEY_PANEL_H_LAND)
+        } else {
+            // ★ 既存キーを portrait 専用として使う
+            PanelSizeKeys(KEY_PANEL_W, KEY_PANEL_H)
+        }
+    }
+
 }

@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PorterDuff
@@ -61,6 +62,7 @@ class DrawingView @JvmOverloads constructor(
     private fun bumpChange() {
         changeCounter++
         onHistoryChanged?.invoke()
+        recomputeSegmentationGuideIfNeeded(force = false)
     }
 
     private val paintTemplate = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -120,6 +122,115 @@ class DrawingView @JvmOverloads constructor(
         invalidate()
     }
 
+    // ---------------- Auto Segmentation Guide ----------------
+
+    /**
+     * MultiCharSegmenter と一致する「区切り線」を表示する
+     */
+    private var guideSegmentationEnabled: Boolean = true
+
+    private val guideSegPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = context.getColor(R.color.ink_color)
+        style = Paint.Style.STROKE
+        strokeWidth = 2f
+        alpha = 110
+        pathEffect = DashPathEffect(floatArrayOf(12f, 10f), 0f)
+    }
+
+    private var guideSegCfg: MultiCharSegmenter.SegmentationConfig =
+        MultiCharSegmenter.SegmentationConfig()
+
+    /**
+     * 区切り線（x座標、View座標系）
+     */
+    private var guideSegXs: IntArray = intArrayOf()
+
+    private var guideSegLastComputedCounter: Long = -1L
+    private var guideSegLastComputedW: Int = -1
+    private var guideSegLastComputedH: Int = -1
+
+    fun setGuideSegmentationEnabled(enabled: Boolean) {
+        guideSegmentationEnabled = enabled
+        if (!enabled) {
+            guideSegXs = intArrayOf()
+        } else {
+            recomputeSegmentationGuideIfNeeded(force = true)
+        }
+        invalidate()
+    }
+
+    fun setGuideSegmentationAlpha(alpha: Int) {
+        guideSegPaint.alpha = alpha.coerceIn(0, 255)
+        invalidate()
+    }
+
+    fun setGuideSegmentationStrokeWidthPx(px: Float) {
+        guideSegPaint.strokeWidth = px.coerceAtLeast(1f)
+        invalidate()
+    }
+
+    fun setGuideSegmentationDashed(enabled: Boolean) {
+        guideSegPaint.pathEffect = if (enabled) {
+            DashPathEffect(floatArrayOf(12f, 10f), 0f)
+        } else {
+            null
+        }
+        invalidate()
+    }
+
+    fun setGuideSegmentationConfig(cfg: MultiCharSegmenter.SegmentationConfig) {
+        guideSegCfg = cfg
+        recomputeSegmentationGuideIfNeeded(force = true)
+        invalidate()
+    }
+
+    private fun recomputeSegmentationGuideIfNeeded(force: Boolean) {
+        if (!guideSegmentationEnabled) return
+
+        if (!hasInk()) {
+            guideSegXs = intArrayOf()
+            guideSegLastComputedCounter = changeCounter
+            guideSegLastComputedW = width
+            guideSegLastComputedH = height
+            return
+        }
+
+        if (width <= 1 || height <= 1) return
+
+        val needs = force ||
+                guideSegLastComputedCounter != changeCounter ||
+                guideSegLastComputedW != width ||
+                guideSegLastComputedH != height
+
+        if (!needs) return
+
+        val white = exportStrokesBitmapWhiteBg(borderPx = 0)
+        val xs = MultiCharSegmenter.estimateSplitLinesPx(white, guideSegCfg)
+        runCatching { white.recycle() }
+
+        // 念のため画面外・重複除去
+        guideSegXs = xs
+            .asSequence()
+            .map { it.coerceIn(0, width) }
+            .distinct()
+            .sorted()
+            .toList()
+            .toIntArray()
+
+        guideSegLastComputedCounter = changeCounter
+        guideSegLastComputedW = width
+        guideSegLastComputedH = height
+    }
+
+    private fun drawSegmentationGuide(canvas: Canvas) {
+        if (guideSegXs.isEmpty()) return
+        val h = height.toFloat()
+        for (x in guideSegXs) {
+            val xf = x.toFloat()
+            canvas.drawLine(xf, 0f, xf, h, guideSegPaint)
+        }
+    }
+
     // ------------------------------------------------
 
     fun setStrokeWidthPx(px: Float) {
@@ -166,8 +277,15 @@ class DrawingView @JvmOverloads constructor(
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
+        // サイズ変化などで必要なら再計算（onDraw で最終保険）
+        recomputeSegmentationGuideIfNeeded(force = false)
+
         if (guideEnabled) {
             drawGuide(canvas)
+        }
+
+        if (guideSegmentationEnabled) {
+            drawSegmentationGuide(canvas)
         }
 
         for (s in strokes) {
@@ -212,6 +330,11 @@ class DrawingView @JvmOverloads constructor(
                 y += step
             }
         }
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        recomputeSegmentationGuideIfNeeded(force = true)
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -283,7 +406,6 @@ class DrawingView @JvmOverloads constructor(
 
         canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
 
-        // ★ export 用Paint（常に黒）
         fun exportPaint(strokeWidth: Float): Paint {
             return Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = Color.BLACK
@@ -295,11 +417,9 @@ class DrawingView @JvmOverloads constructor(
         }
 
         canvas.withTranslation(b.toFloat(), b.toFloat()) {
-            // export にはガイドは描かない
             for (s in strokes) {
                 drawPath(s.path, exportPaint(s.strokeWidthPx))
             }
-
             val cp = currentPath
             if (cp != null) {
                 drawPath(cp, exportPaint(currentStrokeWidthPx))
@@ -310,7 +430,6 @@ class DrawingView @JvmOverloads constructor(
 
     /**
      * 分割・前処理用途の「白背景 + 黒インク」のBitmapを書き出す。
-     * （透明背景でも動きますが、列投影などの前処理が安定します）
      */
     fun exportStrokesBitmapWhiteBg(borderPx: Int = 0): Bitmap {
         val w0 = width.coerceAtLeast(1)
@@ -346,16 +465,6 @@ class DrawingView @JvmOverloads constructor(
         return bmp
     }
 
-    /**
-     * DrawingView上の手書きを「複数文字の可能性がある」として分割し、文字ごとのBitmapを返す。
-     *
-     * - 戻りが1要素なら「単一文字扱い」
-     * - 2要素以上なら「複数文字扱い」
-     *
-     * 注意:
-     * - 横書き前提（左→右）です。
-     * - 「い」などの誤分割を抑えるヒューリスティック込みですが、完璧ではありません。
-     */
     fun exportCharBitmaps(
         segCfg: MultiCharSegmenter.SegmentationConfig = MultiCharSegmenter.SegmentationConfig()
     ): List<Bitmap> {
@@ -363,10 +472,7 @@ class DrawingView @JvmOverloads constructor(
 
         val white = exportStrokesBitmapWhiteBg(borderPx = 0)
         val parts = MultiCharSegmenter.splitToCharBitmaps(white, segCfg)
-
-        // white は役目を終えたので破棄（parts は別Bitmapとして生成済）
         runCatching { white.recycle() }
-
         return parts
     }
 }
