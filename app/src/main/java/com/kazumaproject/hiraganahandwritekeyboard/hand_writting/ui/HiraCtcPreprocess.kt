@@ -2,16 +2,24 @@ package com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui
 
 import android.graphics.Bitmap
 import android.graphics.Color
+import androidx.core.graphics.createBitmap
 import androidx.core.graphics.scale
 import kotlin.math.roundToInt
-import androidx.core.graphics.createBitmap
 
 data class PreprocessConfig(
     val targetH: Int = 32,
     val maxW: Int = 512,
     val inkThresh: Int = 245,
     val pasteMode: PasteMode = PasteMode.LEFT, // 学習分布に合わせて切替
-    val minPasteMarginPx: Int = 0              // 例: 8 など。余白を少し確保したい場合
+    val minPasteMarginPx: Int = 0,             // 例: 8 など。余白を少し確保したい場合
+    /**
+     * ★追加:
+     * true のとき入力を反転する（white=0.0, black=1.0）
+     * false のとき従来通り（white=1.0, black=0.0）
+     *
+     * 学習で invert を入れたなら、推論も true にすること。
+     */
+    val invertInput: Boolean = true
 )
 
 enum class PasteMode { LEFT, CENTER }
@@ -45,10 +53,8 @@ object HiraCtcPreprocess {
         val pasteH = resized.height.coerceAtMost(H - pasteMargin * 2).coerceAtLeast(1)
 
         val resized2 =
-            if (pasteW == resized.width && pasteH == resized.height) resized else resized.scale(
-                pasteW,
-                pasteH
-            )
+            if (pasteW == resized.width && pasteH == resized.height) resized
+            else resized.scale(pasteW, pasteH)
 
         val dx = when (cfg.pasteMode) {
             PasteMode.LEFT -> pasteMargin
@@ -64,12 +70,12 @@ object HiraCtcPreprocess {
 
         // valid_w を「最終キャンバス」から推定（Pythonと整合）
         val validW = estimateValidWidthFromWhiteBg(canvasBmp, cfg.inkThresh)
-        //val tValid = maxOf(1, validW / 4)
+
         /** モデル変更に伴い 2 に変更。 **/
         val tValid = maxOf(1, validW / 2)
 
-        // float [0,1]（white=1.0, black=0.0）に変換
-        val outFloats = toWhiteBlackFloat01(canvasBmp)
+        // ★ここが本題：float化（必要なら反転）
+        val outFloats = toWhiteBlackFloat01(canvasBmp, invert = cfg.invertInput)
 
         // recycle（必要なら）
         if (resized2 !== resized) runCatching { resized2.recycle() }
@@ -161,7 +167,13 @@ object HiraCtcPreprocess {
         return if (lastInkX < 0) w else (lastInkX + 1).coerceIn(1, w)
     }
 
-    private fun toWhiteBlackFloat01(bmp: Bitmap): FloatArray {
+    /**
+     * 画像を float[0,1] に変換する。
+     *
+     * invert=false: white=1.0, black=0.0（従来）
+     * invert=true : white=0.0, black=1.0（反転モデル用）
+     */
+    private fun toWhiteBlackFloat01(bmp: Bitmap, invert: Boolean): FloatArray {
         val w = bmp.width
         val h = bmp.height
         val pixels = IntArray(w * h)
@@ -171,15 +183,19 @@ object HiraCtcPreprocess {
         for (i in pixels.indices) {
             val c = pixels[i]
             val a = Color.alpha(c)
-            if (a == 0) {
-                floats[i] = 1.0f
+
+            // alpha==0 は「白扱い」で安定化（export透明のケース対策）
+            val gray01 = if (a == 0) {
+                1.0f
             } else {
                 val r = Color.red(c)
                 val g = Color.green(c)
                 val b = Color.blue(c)
                 val gray = 0.299f * r + 0.587f * g + 0.114f * b
-                floats[i] = (gray / 255.0f).coerceIn(0f, 1f)
+                (gray / 255.0f).coerceIn(0f, 1f)
             }
+
+            floats[i] = if (!invert) gray01 else (1.0f - gray01)
         }
         return floats
     }
