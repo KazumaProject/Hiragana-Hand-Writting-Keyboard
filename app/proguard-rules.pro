@@ -19,3 +19,11 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+-keep class org.pytorch.** { *; }
+-keep class com.facebook.jni.** { *; }
+-dontwarn org.pytorch.**
+-dontwarn com.facebook.jni.**
+
+-keep class com.kazumaproject.kana_kanji_converter.NativeKanaKanji { *; }
+-keep class com.kazumaproject.kana_kanji_converter.NativeCandidate { *; }
