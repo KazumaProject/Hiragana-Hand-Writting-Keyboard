@@ -595,7 +595,6 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             }
         )
 
-        // ★ここが主変更: Backspace で「最後の1文字（推定）」を描画から削除 → 再推論
         fun backspaceKey() = KeyboardKeySpec.ButtonKey(
             keyId = "backspace",
             text = "⌫",
@@ -604,15 +603,12 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
 
                 val dv = drawingViewFor(dual, activeSide)
 
-                // まず描画側で「最後の1文字」を消せるか試す
                 val erased = dv.eraseLastEstimatedChar(segCfg = defaultSegCfg())
 
                 if (erased) {
-                    // 旧推論結果で上書きされないように世代を進めて、現ジョブを止める
                     bumpGeneration(activeSide)
                     cancelInferJobFor(activeSide)
 
-                    // 描画が空になったなら、候補とプレビューを消す
                     if (!dv.hasInk()) {
                         submitCandidates(emptyList())
                         clearActivePreviewFromIme(controller)
@@ -621,19 +617,16 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
                         return@ButtonKey
                     }
 
-                    // 残っているなら再推論して候補/プレビュー末尾を更新
                     scheduleInferReplaceAndShowCandidates(dual, activeSide, controller)
                     updateUndoRedoEnabled(dual)
                     return@ButtonKey
                 }
 
-                // 消せない（インク無し等）場合は通常の Backspace として動作
                 c.dispatch(KeyboardAction.Backspace)
                 if (controller.isPreedit && activePreviewLen > 0) {
                     activePreviewLen = (activePreviewLen - 1).coerceAtLeast(0)
                 }
 
-                // 文字入力側だけ変えたので、候補はクリアしておく（従来の安全動作）
                 submitCandidates(emptyList())
                 updateUndoRedoEnabled(dual)
             },
@@ -850,13 +843,17 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             if (!isLatest(side, token)) return@launch
 
             if (side == activeSide) {
-                val shown = expandCandidatesWithVariants(result.displayCandidates)
+                val shown0 = expandCandidatesWithVariants(result.displayCandidates)
+                val shown = shown0.map { it.copy(text = applyHardConstraints(it.text)) }
                 submitCandidates(shown)
             }
 
             if (side != activeSide) return@launch
 
-            val topText = result.composedText.trim()
+            val topText0 = result.composedText.trim()
+            if (topText0.isBlank()) return@launch
+
+            val topText = applyHardConstraints(topText0)
             if (topText.isBlank()) return@launch
 
             applyReplaceTailToIme(controller, topText)
@@ -867,13 +864,79 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         if (side == DualDrawingComposerView.Side.A) inferJobA = newJob else inferJobB = newJob
     }
 
+    /**
+     * ハード制約:
+     * 要件: 「、、」は「い」にしたい
+     */
+    private fun applyHardConstraints(text: String): String {
+        if (text.isEmpty()) return text
+        return text.replace("、、", "い")
+    }
+
+    /**
+     * 句読点
+     */
+    private val bannedPunct: Set<String> = setOf("、", "。")
+
+    private fun containsAnyPunct(text: String, punct: Set<String>): Boolean {
+        val s = text.trim()
+        if (s.isEmpty()) return false
+        for (i in s.indices) {
+            val ch = s.substring(i, i + 1)
+            if (punct.contains(ch)) return true
+        }
+        return false
+    }
+
+    private fun containsConsecutivePunct(text: String, punct: Set<String>): Boolean {
+        val s = text.trim()
+        if (s.length < 2) return false
+        for (i in 0 until (s.length - 1)) {
+            val a = s.substring(i, i + 1)
+            val b = s.substring(i + 1, i + 2)
+            if (punct.contains(a) && punct.contains(b)) return true
+        }
+        return false
+    }
+
+    // ★追加: 句読点を除去した文字列を返す（無表示防止のフォールバックで使用）
+    private fun removePunct(text: String, punct: Set<String>): String {
+        val s = text.trim()
+        if (s.isEmpty()) return s
+        val sb = StringBuilder(s.length)
+        for (i in s.indices) {
+            val ch = s.substring(i, i + 1)
+            if (!punct.contains(ch)) sb.append(ch)
+        }
+        return sb.toString()
+    }
+
+    // ★追加: 候補の作成（dedupe）用
+    private fun addUniqueByText(
+        out: ArrayList<CtcCandidate>,
+        seen: LinkedHashSet<String>,
+        c: CtcCandidate
+    ) {
+        val t = c.text.trim()
+        if (t.isEmpty()) return
+        if (seen.add(t)) out.add(c.copy(text = t))
+    }
+
+    /**
+     * ★修正済み runInferTopKMulti:
+     * - 句読点が混じっても「全候補が落ちて何も表示されない」を潰す
+     * - rawText に句読点があっても、applyHardConstraints で消えるなら採用（"、、"→"い"）
+     * - 消えないなら、その候補だけ落とす（全落としにしない）
+     * - それでも空なら、句読点除去のフォールバック候補を作る（無表示防止）
+     */
     private fun runInferTopKMulti(parts: List<Bitmap>, topK: Int): MultiInferResult {
         val all: ArrayList<List<CtcCandidate>> = ArrayList(parts.size)
 
         for (bmp in parts) {
-            val cands = runInferTopK(bmp, topK = topK)
+            val raw = runInferTopK(bmp, topK = topK)
                 .filter { it.text.isNotBlank() && it.percent > 0.0 }
-            all.add(cands)
+
+            all.add(raw)
             runCatching { bmp.recycle() }
         }
 
@@ -881,38 +944,122 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
             return MultiInferResult(composedText = "", displayCandidates = emptyList())
         }
 
+        // ---- 単独文字モード ----
         if (all.size == 1) {
             val filtered = all.first()
-            val top1 = filtered.firstOrNull()?.text?.trim().orEmpty()
+                .asSequence()
+                .filterNot { containsConsecutivePunct(it.text, bannedPunct) }
+                .toList()
+
+            val top1Raw = filtered.firstOrNull()?.text?.trim().orEmpty()
+            val top1 = applyHardConstraints(top1Raw).trim()
+
             return MultiInferResult(
                 composedText = top1,
-                displayCandidates = filtered
+                displayCandidates = filtered.map { it.copy(text = applyHardConstraints(it.text).trim()) }
             )
         }
 
+        // ---- 複数文字モード ----
+        // prefix: ここでは句読点も含みうる（後で候補側で処理）
         val prefix = buildString {
             for (i in 0 until (all.size - 1)) {
                 val t = all[i].firstOrNull()?.text?.trim().orEmpty()
                 if (t.isBlank()) return@buildString
                 append(t)
             }
-        }
+        }.trim()
 
         if (prefix.isBlank()) {
+            // prefix が作れないなら、最後だけでも返す（無表示防止）
+            val last0 = all.lastOrNull().orEmpty()
+            val lastFiltered = last0
+                .asSequence()
+                .map { it.copy(text = applyHardConstraints(it.text).trim()) }
+                .filter { it.text.isNotBlank() }
+                .filterNot { containsConsecutivePunct(it.text, bannedPunct) }
+                .toList()
+
+            val top = lastFiltered.firstOrNull()?.text?.trim().orEmpty()
+            return MultiInferResult(composedText = top, displayCandidates = lastFiltered)
+        }
+
+        val lastRaw = all.last()
+        if (lastRaw.isEmpty()) {
             return MultiInferResult(composedText = "", displayCandidates = emptyList())
         }
 
-        val lastFiltered = all.last().filter { it.text.isNotBlank() && it.percent > 0.0 }
-        if (lastFiltered.isEmpty()) {
+        val derived = ArrayList<CtcCandidate>(lastRaw.size * 2)
+        val seen = LinkedHashSet<String>()
+
+        for (c in lastRaw) {
+            val tail = c.text.trim()
+            if (tail.isBlank()) continue
+
+            val rawText = (prefix + tail).trim()
+            if (rawText.isBlank()) continue
+
+            // 1) まず制約適用
+            val fixed = applyHardConstraints(rawText).trim()
+            if (fixed.isBlank()) continue
+
+            val rawHasPunct = containsAnyPunct(rawText, bannedPunct) || containsConsecutivePunct(
+                rawText,
+                bannedPunct
+            )
+            val fixedHasPunct =
+                containsAnyPunct(fixed, bannedPunct) || containsConsecutivePunct(fixed, bannedPunct)
+            val replaced = (fixed != rawText)
+
+            // 2) 採用判定
+            // - 置換が起きて句読点が消えたならOK（例: "、、"→"い"）
+            // - 置換なしで句読点が残るなら、その候補だけNG（全落としにしない）
+            if (!replaced && rawHasPunct) {
+                // この候補は落とす
+            } else if (replaced && fixedHasPunct) {
+                // 置換後も句読点が残るなら落とす
+            } else {
+                addUniqueByText(derived, seen, c.copy(text = fixed))
+            }
+
+            // 3) ★フォールバック: rawText に句読点が含まれていて上で落ちた場合でも、
+            // 句読点を除去したバージョンを候補として追加（無表示防止）
+            if (rawHasPunct) {
+                val stripped = removePunct(rawText, bannedPunct).trim()
+                val strippedFixed = applyHardConstraints(stripped).trim()
+                if (strippedFixed.isNotBlank() && !containsAnyPunct(strippedFixed, bannedPunct)) {
+                    // percent は少し下げる（句読点除去は弱い候補）
+                    addUniqueByText(
+                        derived,
+                        seen,
+                        c.copy(
+                            text = strippedFixed,
+                            percent = (c.percent * 0.75).coerceAtLeast(0.0)
+                        )
+                    )
+                }
+            }
+        }
+
+        if (derived.isEmpty()) {
+            // 最後の最後: prefix 自体から句読点を消したもの + last のトップで作る
+            val prefixStripped = removePunct(prefix, bannedPunct).trim()
+            val tailTop = lastRaw.firstOrNull()?.text?.trim().orEmpty()
+            val rawText = (prefixStripped + tailTop).trim()
+            val fixed = applyHardConstraints(rawText).trim()
+            if (fixed.isNotBlank()) {
+                val only = listOf(CtcCandidate(text = fixed, percent = 1.0))
+                return MultiInferResult(composedText = fixed, displayCandidates = only)
+            }
             return MultiInferResult(composedText = "", displayCandidates = emptyList())
         }
 
-        val composedTop1 = prefix + lastFiltered.first().text.trim()
-        val display = lastFiltered.map { it.copy(text = prefix + it.text) }
+        derived.sortByDescending { it.percent }
+        val composedTop1 = derived.first().text.trim()
 
         return MultiInferResult(
             composedText = composedTop1,
-            displayCandidates = display
+            displayCandidates = derived
         )
     }
 
@@ -1073,25 +1220,16 @@ class HandwriteKeyboardPlugin : KeyboardPlugin {
         }
     }
 
-    private fun dpToPx(v: View, dp: Float): Int {
+    private fun dpToPx(rootView: View, dp: Float): Int {
         return TypedValue.applyDimension(
             TypedValue.COMPLEX_UNIT_DIP,
             dp,
-            v.resources.displayMetrics
+            rootView.resources.displayMetrics
         ).toInt()
     }
 
-    /**
-     * 推論・ガイド・backspace で同じ設定を使うための共通 Config
-     */
     private fun defaultSegCfg(): MultiCharSegmenter.SegmentationConfig {
-        return MultiCharSegmenter.SegmentationConfig(
-            segTargetH = 48,
-            minGapPx = 10,
-            thinSegmentWidthPx = 12,
-            mergeGapPx = 6,
-            outPadPx = 6
-        )
+        return MultiCharSegmenter.SegmentationConfig()
     }
 
     companion object {

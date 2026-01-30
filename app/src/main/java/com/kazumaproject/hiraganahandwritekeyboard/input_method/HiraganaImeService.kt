@@ -39,7 +39,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import timber.log.Timber
 import kotlin.math.max
 import kotlin.math.min
 
@@ -808,7 +807,6 @@ class HiraganaImeService : InputMethodService() {
                 lastCandidatesKey = key
                 candidateAdapter?.submit(list)
                 candidateRecycler?.scrollToPosition(0)
-                Timber.d("requestCandidatesAsync: $list")
 
                 // CandidateMode 整合性（CandidateMode中に候補を作り直さない設計だが保険）
                 if (inCandidateMode) {
