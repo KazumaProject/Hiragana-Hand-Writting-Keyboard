@@ -2,12 +2,15 @@ package com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
 import com.kazumaproject.hiraganahandwritekeyboard.hand_writting.data.CtcCandidate
 import com.kazumaproject.hiraganahandwritekeyboard.hand_writting.data.CtcVocab
 import com.kazumaproject.hiraganahandwritekeyboard.hand_writting.ui.utils.AssetUtil
 import org.pytorch.IValue
 import org.pytorch.Module
 import org.pytorch.Tensor
+import androidx.core.graphics.createBitmap
 
 class HiraCtcRecognizer(
     context: Context,
@@ -78,6 +81,110 @@ class HiraCtcRecognizer(
         }.filter { it.text.isNotEmpty() }
 
         return if (out.isNotEmpty()) out else listOf(CtcCandidate(text = "", percent = 100.0))
+    }
+
+    /**
+     * ★追加（既存を壊さない）：parts（複数文字分割bitmap）を推論し、
+     * 「句読点は単独入力（parts.size==1）のときのみ許可」する。
+     *
+     * 要件:
+     * - parts.size == 1: 句読点を許可（通常通り）
+     * - parts.size >= 2: bannedPunct に含まれる句読点は一切出さない
+     *
+     * 実装:
+     * - 各セグメントで topK を取り、句読点が最有力なら「右セグメントと結合」して再推論
+     * - それでも句読点しか出ないなら、そのセグメントは ""（句読点は返さない）
+     *
+     * 注意:
+     * - 新規ファイルは作らず、このクラス内だけで完結
+     * - infer()/inferTopK() の挙動は変更しない
+     */
+    fun inferPartsPunctuationSingleOnly(
+        parts: List<Bitmap>,
+        bannedPunct: Set<String> = setOf("、", "。"),
+        topK: Int = 5
+    ): List<String> {
+        if (parts.isEmpty()) return emptyList()
+
+        // 1文字入力のときだけ句読点OK（従来通り）
+        if (parts.size == 1) {
+            return listOf(infer(parts[0]))
+        }
+
+        // 2文字以上なら句読点は全面禁止
+        val out = ArrayList<String>(parts.size)
+        var i = 0
+
+        while (i < parts.size) {
+            val b = parts[i]
+            val top = inferTopK(b, topK = topK)
+            val best = top.firstOrNull()?.text.orEmpty()
+
+            // 句読点が最有力なら、まず右結合して句読点以外を取りに行く（2セグメント消費）
+            if (best in bannedPunct && i < parts.lastIndex) {
+                val merged = concatHorizontalWhiteBg(b, parts[i + 1])
+                try {
+                    val topMerged = inferTopK(merged, topK = topK)
+                    val pickMerged = pickBestNonBanned(topMerged, bannedPunct)
+
+                    if (pickMerged.isNotEmpty()) {
+                        out.add(pickMerged)
+                        i += 2
+                        continue
+                    }
+
+                    // 結合しても句読点しか出ない → 元セグメントで句読点以外を拾えるか試す
+                    val pick = pickBestNonBanned(top, bannedPunct)
+                    out.add(pick) // pick が空なら空を入れる（句読点は禁止）
+                    i += 1
+                    continue
+                } finally {
+                    runCatching { merged.recycle() }
+                }
+            }
+
+            // 句読点以外なら採用
+            if (best.isNotEmpty() && best !in bannedPunct) {
+                out.add(best)
+                i += 1
+                continue
+            }
+
+            // best が空 or 句読点なら topK から句読点以外を採用（無ければ空）
+            val pick = pickBestNonBanned(top, bannedPunct)
+            out.add(pick)
+            i += 1
+        }
+
+        return out
+    }
+
+    private fun pickBestNonBanned(top: List<CtcCandidate>, banned: Set<String>): String {
+        for (c in top) {
+            val t = c.text
+            if (t.isNotEmpty() && t !in banned) return t
+        }
+        return ""
+    }
+
+    /**
+     * 白背景で横結合（高さはmaxに合わせ、上下中央寄せ）
+     * ※ parts の元Bitmapはリサイクルしない（呼び出し側所有）
+     */
+    private fun concatHorizontalWhiteBg(left: Bitmap, right: Bitmap): Bitmap {
+        val h = maxOf(left.height, right.height)
+        val w = left.width + right.width
+        val out = createBitmap(w.coerceAtLeast(1), h.coerceAtLeast(1))
+
+        val canvas = Canvas(out)
+        canvas.drawColor(Color.WHITE)
+
+        val dyL = ((h - left.height) / 2f)
+        val dyR = ((h - right.height) / 2f)
+
+        canvas.drawBitmap(left, 0f, dyL, null)
+        canvas.drawBitmap(right, left.width.toFloat(), dyR, null)
+        return out
     }
 
     private fun extractLogProbsTV(
